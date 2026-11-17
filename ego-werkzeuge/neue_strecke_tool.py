@@ -544,7 +544,9 @@ def cmd_bauen(args):
         args.welt_uv = "echt"
     optionen = dict(streckencode=args.streckencode, pvs_variante=args.pvs_variante, ziel=args.ziel,
                     nur_original_pvs=args.nur_original_pvs, ohne_geometrie=args.ohne_geometrie,
-                    ohne_minimap=args.ohne_minimap)
+                    ohne_minimap=args.ohne_minimap,
+                    asphalt_vorlage=getattr(args, "asphalt_vorlage", None) or "traeger",
+                    skid_vorlage=getattr(args, "skid_vorlage", None) or "traeger")
     _phase("pruefen_vorab")
     if args.pruefregeln != "aus":
         b = pruefregeln.vorab_pruefen(args.definition, versatz=platzierung.VERSATZ, bauoptionen=optionen)
@@ -617,8 +619,16 @@ def cmd_bauen(args):
                                           hoehe_versatz=args.geometrie_dy, physik_umfang=args.physik_umfang,
                                           physik_kante_max=args.physik_kante_max,
                                           grundflaeche=getattr(args, "grundflaeche", "raster"),
-                                          huegel=huegel or None, welt_uv=getattr(args, "welt_uv", "konstant"), **extra)
-            bericht["schritte"]["geometrie"] = _kurz(geo)
+                                          huegel=huegel or None, welt_uv=getattr(args, "welt_uv", "konstant"),
+                                          asphalt_vorlage=getattr(args, "asphalt_vorlage", None),
+                                          skid_vorlage=getattr(args, "skid_vorlage", None),
+                                          code=zustand.code, **extra)
+            bericht["schritte"]["geometrie"] = _kurz(
+                {k: v for k, v in geo.items() if k != "mipmaps"} if isinstance(geo, dict) else geo)
+            if isinstance(geo, dict) and (geo.get("asphalt_vorlage") or geo.get("skid_vorlage")):
+                bericht["schritte"]["fahrbahn"] = {
+                    k: {kk: vv for kk, vv in (geo.get(k) or {}).items() if kk != "mipmaps"}
+                    for k in ("asphalt_vorlage", "skid_vorlage") if geo.get(k)}
             kb = geo.get("physik", {}).get("kollision")
             if kb:
                 _log("Kollision: %d Quader (%d SCON-Dreiecke) für eigene Modelle in der Fahrphysik%s" % (
@@ -1524,6 +1534,12 @@ def argumente(argv):
     s.add_argument("--weltkarten", action=argparse.BooleanOptionalAction, default=None,
                    help="eigene Boden-, TrackInfo- und Außenterrain-Karten (setzt --welt-uv echt; docs/welt_texturen.md); "
                         "im Profil empfohlen an, --no-weltkarten schaltet sie ab")
+    s.add_argument("--asphalt-vorlage", dest="asphalt_vorlage", default=None, metavar="NAME",
+                   help="Fahrbahnoberfläche aus strecke/daten/fahrbahn.json (Streckenname, z. B. monza); "
+                        "traeger = unverändert; Texturen werden aus dem Spielordner kopiert")
+    s.add_argument("--skid-vorlage", dest="skid_vorlage", default=None, metavar="NAME",
+                   help="Reifenspuren aus strecke/daten/fahrbahn.json (type1…4 oder traeger); "
+                        "traeger = unverändert; Texturen werden aus dem Spielordner kopiert")
     s.add_argument("--traeger-reste", action=argparse.BooleanOptionalAction, default=True,
                    help="ortsgebundene Ebenen des Trägers nachführen: Garagenzubehör, Siegerehrung, Zwischensequenzen, "
                         "Intro-Kameras, Klangverdecker aus, Trainingsprogramm (docs/traeger_reste.md); Standard an")

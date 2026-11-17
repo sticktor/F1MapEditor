@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Track surface and tyre marks in the build dialog: choose a circuit from a fixed catalog
+  (`ego-werkzeuge/strecke/daten/fahrbahn.json`). At build time the textures are copied from the F1 25 game folder
+  (lossless, same path as the desert biome), so no extracted PNGs are needed in the repo. Default remains the
+  Portimão carrier (package byte-identical). Rebuild the catalog with
+  `python -m strecke.asphalt_vorlagen analysieren <game folder>` (asphalt and skid groups by texture MD5).
+  Pre-build checks FB-01/FB-02 report an unknown template or a missing game folder
+
 ## 0.5.0
 
 - Own 3D models from Blender: Import model … in the environment catalogue adds a model (glTF .glb, also .gltf/.obj) to the project (subfolder modelle). It appears under Own models with a preview and notes and is placed, turned and grounded like any other model. The build creates the game resources of the model (geometry, levels of detail, materials, textures) and puts them in your package, no game files are copied for it. Objects named …_LOD1, …_LOD2 become distance versions. Supported: base colour, colour texture, normal map, metal/roughness, transparency (Alpha Blend), cut-outs (Alpha Clip) and double-sided faces. Optional box collision per model (Collision tick in the details, off by default). New checks MO-01 … MO-07 and UM-11 (collision box touches the road or pit lane). Guide for Blender users: docs/own_models_blender.md (German short version: own_models_blender.de.md); also in the ZIP (docs folder) and named in the F1 help
