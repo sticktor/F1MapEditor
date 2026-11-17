@@ -1,4 +1,4 @@
-"""Fahrbahnkatalog (fahrbahn.json) und ERP-Kopier-Backend (sticktor PR #7)."""
+"""Fahrbahnkatalog (fahrbahn.json) und ERP-Kopier-Backend (PR #7 von Ftoaster)."""
 from __future__ import annotations
 
 import json
@@ -19,22 +19,32 @@ def test_fahrbahn_katalog_liegt_im_repo():
     asphalt = daten["asphalt"]
     assert "traeger" in asphalt["vorlagen"]
     assert asphalt["vorlagen"]["traeger"].get("traeger") is True
-    assert "abu_dhabi" in asphalt["vorlagen"]
-    assert "monza" in asphalt["vorlagen"]["abu_dhabi"]["aliase"]
+    assert asphalt["reihenfolge"][0] == "traeger"
+    # Katalog = Ausgabe von analysieren: Abu Dhabi allein, Monaco & Co. mit eigenem Material (Baku-Gruppe)
+    assert asphalt["vorlagen"]["abu_dhabi"]["aliase"][0] == "abu_dhabi"
+    assert "monza" in asphalt["vorlagen"]["baku"]["aliase"] and "monaco" in asphalt["vorlagen"]["baku"]["aliase"]
+    assert {"hungaroring", "catalunya", "melbourne"} <= set(asphalt["vorlagen"])
     skid = daten["skid"]
     assert skid["vorlagen"]["traeger"].get("traeger") is True
     assert skid["reihenfolge"][0] == "traeger"
-    assert "abu_dhabi" in skid["vorlagen"] and "imola" in skid["vorlagen"] and "losail" in skid["vorlagen"]
-    assert "bahrain" not in skid["vorlagen"] and "silverstone" not in skid["vorlagen"]
-    assert "bahrain" in skid["vorlagen"]["imola"]["aliase"]
-    assert "silverstone" in skid["vorlagen"]["losail"]["aliase"]
-    assert "hungaroring" in asphalt["vorlagen"]["traeger"]["aliase"]
+    assert {"abu_dhabi", "losail", "hungaroring", "silverstone"} == set(skid["vorlagen"]) - {"traeger"}
+    assert "spa_francorchamps" in skid["vorlagen"]["silverstone"]["aliase"]
+    assert "miami" in skid["vorlagen"]["losail"]["aliase"]
     assert "type1" in skid["vorlagen"]["abu_dhabi"]["aliase"]
+
+
+def test_vorschaubilder_vollstaendig():
+    """Jeder Katalogeintrag hat sein Vorschaubild, und es liegen keine übrigen Bilder herum."""
+    daten = asphalt_vorlagen.katalog_laden()
+    ordner = Path(asphalt_vorlagen.DATEN).parent / "vorschau"
+    for art in ("asphalt", "skid"):
+        namen = {e["vorschau"] for e in daten[art]["vorlagen"].values()}
+        assert namen == {p.name for p in (ordner / art).glob("*.png")}, art
 
 
 def test_alias_aufloesen_und_traeger_noop():
     key, ein = asphalt_vorlagen._aufloesen(asphalt_vorlagen.asphalt_katalog(), "monza")
-    assert key == "abu_dhabi" and ein["strecke"] == "abu_dhabi"
+    assert key == "baku" and ein["strecke"] == "baku"
     key, ein = asphalt_vorlagen._aufloesen(asphalt_vorlagen.asphalt_katalog(), "type1")
     assert key == "abu_dhabi"
     with pytest.raises(asphalt_vorlagen.VorlagenFehler, match="Unknown"):
@@ -43,8 +53,9 @@ def test_alias_aufloesen_und_traeger_noop():
         "vorlage": "traeger", "traeger": True, "mipmaps": []}
     assert asphalt_vorlagen.skid_einsetzen(None, "type5")["traeger"] is True
     assert asphalt_vorlagen._aufloesen(asphalt_vorlagen.skid_katalog(), "miami")[0] == "losail"
-    assert asphalt_vorlagen._aufloesen(asphalt_vorlagen.skid_katalog(), "bahrain")[0] == "imola"
-    assert asphalt_vorlagen._aufloesen(asphalt_vorlagen.asphalt_katalog(), "hungaroring")[0] == "traeger"
+    with pytest.raises(asphalt_vorlagen.VorlagenFehler):       # lt_ribbon-Strecken haben keine Reifenspurkarte
+        asphalt_vorlagen._aufloesen(asphalt_vorlagen.skid_katalog(), "bahrain")
+    assert asphalt_vorlagen._aufloesen(asphalt_vorlagen.asphalt_katalog(), "hungaroring")[0] == "hungaroring"
 
 
 @pytest.fixture
@@ -67,7 +78,7 @@ def test_build_dialog_fuellt_fahrbahn(window):
     w.open_build()
     d = w.build_dialog
     assert d.asphalt.count() >= 10
-    assert d.asphalt.itemData(0) == "traeger"
+    assert d.asphalt.itemData(0) == "traeger" and d.asphalt.itemText(0) == "Träger (Portimão)"
     assert "Abu Dhabi" in d.asphalt.itemText(d.asphalt.findData("abu_dhabi"))
     assert d.asphalt.currentData() == "traeger"
     assert d.skid.count() >= 2
@@ -78,13 +89,13 @@ def test_build_dialog_fuellt_fahrbahn(window):
     assert d.skid.currentData() == "traeger"
     d._fill_skid("miami")
     assert d.skid.currentData() == "losail"
-    d._fill_skid("bahrain")
-    assert d.skid.currentData() == "imola"
-    assert d.skid.count() >= 4
+    d._fill_skid("bahrain")                 # nicht (mehr) im Katalog: Träger
+    assert d.skid.currentData() == "traeger"
+    assert d.skid.count() == 5
     d._fill_asphalt("monza")
-    assert d.asphalt.currentData() == "abu_dhabi"
+    assert d.asphalt.currentData() == "baku"
     d._fill_asphalt("hungaroring")
-    assert d.asphalt.currentData() == "traeger"
+    assert d.asphalt.currentData() == "hungaroring"
 
 
 def test_fahrbahn_json_ohne_spieltexturen():
@@ -149,3 +160,17 @@ def test_fahrbahn_pruefregeln_unbekannt_und_spielordner(monkeypatch):
     gp3 = pruefregeln.profil_pruefen(asphalt_vorlage="traeger", skid_vorlage="traeger", m=m3)
     assert "FAHRBAHN_UNBEKANNT" in gp3 and "FAHRBAHN_SPIELORDNER" in gp3
     assert not any(x["id"] in ("FAHRBAHN_UNBEKANNT", "FAHRBAHN_SPIELORDNER") for x in m3)
+
+
+def test_fahrbahn_pruefregel_traeger_ohne_katalog(monkeypatch, tmp_path):
+    """Standard (Träger) braucht weder Katalog noch Spielordner; eine Vorlage ohne Katalog meldet FB-01."""
+    from strecke import pruefregeln, umgebung
+
+    monkeypatch.setattr(asphalt_vorlagen, "DATEN", str(tmp_path / "fehlt.json"))
+    monkeypatch.setattr(umgebung, "spielordner_finden", lambda *a, **k: None)
+    m = []
+    pruefregeln.fahrbahn_pruefen("traeger", "traeger", m)
+    pruefregeln.fahrbahn_pruefen(None, None, m)
+    assert m == []
+    pruefregeln.fahrbahn_pruefen("abu_dhabi", None, m)
+    assert [x["id"] for x in m] == ["FAHRBAHN_UNBEKANNT"]

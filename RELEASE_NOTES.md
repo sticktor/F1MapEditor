@@ -1,5 +1,9 @@
 Mapeditor is a Windows editor for designing your own tracks for F1 25.
 
+## New in 0.5.1
+
+- **Choose the track surface and the tyre marks:** in the Build window (Advanced) pick the asphalt and the dark tyre-mark strip of an F1 25 circuit, e.g. Abu Dhabi, Silverstone or Losail, with a small preview. The build copies them from your game folder (read-only) into the package; the pit lane stays Portimão. Default is the carrier as before. Tested in the game with the Abu Dhabi surface and the Losail tyre marks; Bahrain, Imola, Madrid, Melbourne and Suzuka supply only the base textures and are untested. Contributed by [Ftoaster](https://github.com/Ftoaster) in PR #7, thank you!
+
 ## New in 0.5.0
 
 - **Your own 3D models from Blender:** export a model as glTF (`.glb`), press *Import model …* in the Environment tab, and place it like any other object. The build creates everything the model needs (geometry, levels of detail, materials, textures) and puts it in your package, no game files are used for it. Tested in the game: several materials, textures, three levels of detail and tens of thousands of triangles. Materials with colour, colour texture, normal map, metal/roughness, transparency (glass) and cut-outs (fences, leaves) work, also double-sided faces. Tick *Collision* for an invisible box around a model that cars bounce off. New checks MO-01 to MO-07 and UM-11 (collision box on the road). Step-by-step guide: `Mapeditor/docs/own_models_blender.md` in the source and in the `docs` folder of the ZIP (German short version: `own_models_blender.de.md`); the F1 help names it
@@ -64,7 +68,7 @@ Mapeditor is a Windows editor for designing your own tracks for F1 25.
 
 ## Download
 
-`Mapeditor-0.5.0-win64.zip`: unpack the whole folder and start `Mapeditor.exe`. The program is not signed, so Windows may
+`Mapeditor-0.5.1-win64.zip`: unpack the whole folder and start `Mapeditor.exe`. The program is not signed, so Windows may
 show a warning.
 
 ## What you need
@@ -100,4 +104,4 @@ Use offline and at your own risk. Back up your save data and game database first
 
 ## Licence
 
-GPL-3.0-only for this project's code, see `LICENSE`. The source code of this release is in this repository at tag `v0.3.2`.
+GPL-3.0-only for this project's code, see `LICENSE`. The source code of this release is in this repository at tag `v0.5.1`.

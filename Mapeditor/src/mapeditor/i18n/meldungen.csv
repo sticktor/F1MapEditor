@@ -554,3 +554,17 @@ Collision box of object {} overlaps {} (cars hit it);Kollisionsbox von Objekt {}
 Model {}: collision must be keine or quader ({});Modell {}: Kollision muss keine oder quader sein ({});모델 {}: 충돌은 keine 또는 quader 여야 합니다 ({});eigene_modelle.py
 Object {}: collision only works for own models (game model {} keeps none);Objekt {}: Kollision gibt es nur für eigene Modelle (Spielmodell {} bleibt ohne);오브젝트 {}: 충돌은 자체 모델에서만 작동합니다 (게임 모델 {}은(는) 충돌 없음);kollision.py
 Object {}: kollision must be one of {} ({});Objekt {}: kollision muss eines von {} sein ({});오브젝트 {}: kollision 은 {} 중 하나여야 합니다 ({});umgebung.py
+Game folder required for track surface {} (Tools → Set F1 25 game folder);Spielordner nötig für Fahrbahnoberfläche {} (Werkzeuge → F1-25-Spielordner festlegen);트랙 표면 {}에 게임 폴더가 필요합니다 (도구 → F1 25 게임 폴더 설정);asphalt_vorlagen.py
+Game folder required for tyre marks {};Spielordner nötig für Reifenspuren {};타이어 마크 {}에 게임 폴더가 필요합니다;asphalt_vorlagen.py
+No track ERP for {} in the game folder;Keine Strecken-ERP für {} im Spielordner;게임 폴더에 {}의 트랙 ERP가 없습니다;asphalt_vorlagen.py
+Not an F1 25 game folder: {};Kein F1-25-Spielordner: {};F1 25 게임 폴더가 아닙니다: {};asphalt_vorlagen.py
+Skid texture missing for {}: {};Reifenspurtextur fehlt für {}: {};{}의 타이어 마크 텍스처가 없습니다: {};asphalt_vorlagen.py
+Template {} has no skid texture;Vorlage {} hat keine Reifenspurtextur;템플릿 {}에 타이어 마크 텍스처가 없습니다;asphalt_vorlagen.py
+Template {} has no texture slots;Vorlage {} hat keine Texturplätze;템플릿 {}에 텍스처 슬롯이 없습니다;asphalt_vorlagen.py
+Textures missing after copying for {}: {};Texturen fehlen nach dem Kopieren für {}: {};{} 복사 후 텍스처가 없습니다: {};asphalt_vorlagen.py
+Textures missing in the game data for {}: {};Texturen fehlen in den Spieldaten für {}: {};{}의 게임 데이터에 텍스처가 없습니다: {};asphalt_vorlagen.py
+Unknown template {} (not in {});Vorlage {} unbekannt (nicht in {});알 수 없는 템플릿 {} ({}에 없음);asphalt_vorlagen.py
+por_track_a has none of the slots {};por_track_a hat keinen der Plätze {};por_track_a에 슬롯 {} 중 어느 것도 없습니다;asphalt_vorlagen.py
+{} has no slot {};{} hat keinen Platz {};{}에 슬롯 {}이(가) 없습니다;asphalt_vorlagen.py
+{} missing in the carrier;{} fehlt im Träger;캐리어에 {}이(가) 없습니다;asphalt_vorlagen.py
+Track surface/tyre marks need the F1 25 game folder (Tools → Set F1 25 game folder);Fahrbahnoberfläche/Reifenspuren brauchen den F1-25-Spielordner (Werkzeuge → F1-25-Spielordner festlegen);트랙 표면/타이어 마크에는 F1 25 게임 폴더가 필요합니다 (도구 → F1 25 게임 폴더 설정);pruefregeln.py

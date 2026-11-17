@@ -15,6 +15,3 @@ release-assets/
 *.erp
 *.mipmaps
 *.zip
-
-# Extrahierte Fahrbahntexturen (nur lokal, nie ins Repository)
-ego-werkzeuge/asphalt_texturen/

@@ -20,6 +20,7 @@ English version: [README.md](README.md)
 - Boxengasse und Startaufstellung setzen, Objekte aus dem Katalog des Spiels platzieren, Hügel und Berge anlegen
 - Eigene 3D-Modelle aus Blender (glTF) als Kulisse importieren: siehe [Eigene 3D-Modelle aus Blender](Mapeditor/docs/own_models_blender.de.md) (ausführlich auf Englisch: [own_models_blender.md](Mapeditor/docs/own_models_blender.md))
 - Boden, Ideallinie und Umland aus der Strecke selbst erzeugen
+- Asphalt und Reifenspuren einer F1-25-Strecke für die Fahrbahn übernehmen: siehe [Track surface and tyre marks](Mapeditor/docs/fahrbahn/README.md) (englisch)
 - Strecke gegen Regeln prüfen, die aus den Originalstrecken abgeleitet sind
 - Paket für den Track Installer bauen (veraltet, besser Swofty Launcher) oder eine installierte Strecke zum Testen direkt austauschen
 - Oder ein Addon für den [Swofty Launcher](https://f1.swofty.net/) bauen, mit dem eigenen Streckennamen im Menü des Spiels

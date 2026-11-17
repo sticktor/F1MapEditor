@@ -34,12 +34,6 @@ BUILD_STATES = [N_("läuft"), N_("abgebrochen"), N_("fehlgeschlagen"), N_("mit_t
 GOOD_BUILDS = {"ok", "mit_traegerabweichung"}
 
 #: Alte gespeicherte Skid-Schlüssel → Katalogschlüssel (fahrbahn.json).
-SKID_ALT = {
-    "type1": "abu_dhabi", "type2": "hungaroring", "type3": "imola", "type4": "losail", "type5": "traeger",
-    "portimao": "traeger", "catalunya": "losail", "miami": "losail",
-    "silverstone": "losail", "spa_francorchamps": "losail",
-    "bahrain": "imola", "madrid": "imola", "melbourne": "imola", "suzuka": "imola",
-}
 #: Zustände der Statuskarte: Kennung → (Text, Farbe, Symbol)
 BUILD_STATES_UI = {"ready": (N_("Ready"), "#5BD08A", "●"), "checking": (N_("Checking"), "#D6A94A", "◐"),
                    "building": (N_("Building"), "#5AA9E6", "◐"), "working": (N_("Working"), "#5AA9E6", "◐"),
@@ -969,7 +963,8 @@ class BuildDialog(QDialog):
             data = "traeger" if eintrag.get("traeger") else key
             for alt in eintrag.get("aliase") or []:
                 alias[alt] = data
-            label = eintrag.get("name") or key.replace("_", " ").title()
+            label = (tr("Carrier (Portimão)") if eintrag.get("traeger")
+                     else eintrag.get("name") or key.replace("_", " ").title())
             self.asphalt.addItem(label, data)
         gewählt = alias.get(gewählt, gewählt)
         if self.asphalt.count() == 0:
@@ -995,7 +990,6 @@ class BuildDialog(QDialog):
         """Reifenspuren wie skid_vergleich/목록.txt (gleiche Streifen zusammengefasst)."""
         self._skid_katalog = {}
         self.skid.clear()
-        gewählt = SKID_ALT.get(gewählt, gewählt)
         reihenfolge = []
         try:
             daten = self._fahrbahn_katalog().get("skid") or {}
@@ -1014,7 +1008,7 @@ class BuildDialog(QDialog):
             eintrag = self._skid_katalog.get(key)
             if not eintrag:
                 continue
-            self.skid.addItem(eintrag.get("name") or key, key)
+            self.skid.addItem(tr("Carrier (Portimão)") if eintrag.get("traeger") else eintrag.get("name") or key, key)
         if self.skid.count() == 0:
             self.skid.addItem(tr("Carrier (Portimão)"), "traeger")
         if self.skid.findData(gewählt) < 0:

@@ -20,6 +20,7 @@ German version: [README.de.md](README.de.md)
 - Place the pit lane, grid and environment objects from the game's own catalogue, add hills and mountains
 - Import your own 3D models from Blender (glTF) as scenery: see [Own 3D models from Blender](Mapeditor/docs/own_models_blender.md)
 - Generate ground, racing line and surroundings textures from the track itself
+- Take the asphalt and tyre marks of an F1 25 circuit for the road: see [Track surface and tyre marks](Mapeditor/docs/fahrbahn/README.md)
 - Check the track against rules learned from the original circuits
 - Build a package for the track installer (deprecated, use Swofty Launcher instead), or swap an installed track directly for testing
 - Or build an addon for [Swofty Launcher](https://f1.swofty.net/), with the track's own name in the game's menus

@@ -1,13 +1,15 @@
 # Changelog
 
-## Unreleased
+## 0.5.1
 
-- Track surface and tyre marks in the build dialog: choose a circuit from a fixed catalog
-  (`ego-werkzeuge/strecke/daten/fahrbahn.json`). At build time the textures are copied from the F1 25 game folder
-  (lossless, same path as the desert biome), so no extracted PNGs are needed in the repo. Default remains the
-  Portimão carrier (package byte-identical). Rebuild the catalog with
-  `python -m strecke.asphalt_vorlagen analysieren <game folder>` (asphalt and skid groups by texture MD5).
-  Pre-build checks FB-01/FB-02 report an unknown template or a missing game folder
+- Track surface and tyre marks (Build window, Advanced): choose the asphalt and the dark tyre-mark strip of an F1 25
+  circuit instead of the Portimão carrier's. At build time the textures and the matching material values are copied
+  losslessly from the game folder (read-only) into your package; the pit lane stays Portimão. The list comes from a
+  fixed catalogue (`ego-werkzeuge/strecke/daten/fahrbahn.json`, circuits with identical textures merged) with small
+  previews; `python -m strecke.asphalt_vorlagen analysieren <game folder>` rebuilds it after a game update. Default is
+  the carrier, which leaves the package unchanged. New checks FB-01 (unknown surface) and FB-02 (game folder missing).
+  Command line: `neue_strecke_tool.py bauen --asphalt-vorlage NAME --skid-vorlage NAME`. Contributed by Ftoaster
+  (PR #7). Tested in the game with the Abu Dhabi surface and the Losail tyre marks
 
 ## 0.5.0
 

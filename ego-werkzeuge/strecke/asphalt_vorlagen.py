@@ -1,7 +1,8 @@
 """Fahrbahnoberflächen und Reifenspuren aus den Spielstrecken: feste Katalogdatei, beim Bau
 verlustfrei aus den Strecken-ERPs kopieren (wie ``spiel_weltkarten.biom_wueste``).
 
-Katalog: ``strecke/daten/fahrbahn.json`` (ohne Spieltexturen). Neu erzeugen:
+Katalog: ``strecke/daten/fahrbahn.json`` (ohne Spieltexturen), kleine Vorschaubilder unter
+``strecke/daten/vorschau/<asphalt|skid>/``. Neu erzeugen (Katalog genau die Ausgabe, fehlende Vorschauen dazu):
 ``python -m strecke.asphalt_vorlagen analysieren <Spielordner>``.
 """
 from __future__ import annotations
@@ -16,6 +17,8 @@ from ego import erp, grafik
 from . import umgebung
 
 DATEN = os.path.join(os.path.dirname(os.path.abspath(__file__)), "daten", "fahrbahn.json")
+#: Vorschau: Asphalt = Albedo 160×160, Reifenspuren = Streifen hochkant 80×160
+VORSCHAU_GROESSE = {"asphalt": (160, 160), "skid": (80, 160)}
 ZIEL_MATERIAL = "por_track_a.material"
 SKID_SLOT = "me_racingSkidsMap"
 #: Zielslot (por_track_a) ← Quellslot je Shader
@@ -251,6 +254,9 @@ def _alt_vorschau(alt_vorlagen: dict, schluessel: str, wert: str, fallback: str)
     return fallback
 
 
+_TRAEGER_GRUNDALIASE = ("traeger", "portimao", "type3", "type12")
+
+
 def asphalt_katalog_aus_roh(vorlagen_roh: dict, alt_asphalt=None) -> dict:
     """Gleiche Asphalt-Textur-MD5s zusammenfassen; Portimão-Finger → ``traeger``."""
     alt_vorlagen = (alt_asphalt or {}).get("vorlagen") or {}
@@ -297,7 +303,8 @@ def asphalt_katalog_aus_roh(vorlagen_roh: dict, alt_asphalt=None) -> dict:
             traeger_aliase.append(a)
     vorlagen["traeger"] = {
         "traeger": True,
-        "name": _gruppen_name([s for s in traeger_aliase if s not in ("traeger", "type3", "type12")] or ["portimao"]),
+        "name": "Carrier (Portimão)" if not [s for s in traeger_aliase if s not in _TRAEGER_GRUNDALIASE]
+                else "Carrier (Portimão) / " + _gruppen_name([s for s in traeger_aliase if s not in _TRAEGER_GRUNDALIASE]),
         "aliase": traeger_aliase,
         "vorschau": alt_t.get("vorschau") or "type12.png",
     }
@@ -344,8 +351,10 @@ def skid_katalog_aus_roh(skid_roh: dict, alt_skid=None) -> dict:
     return {"reihenfolge": reihenfolge, "vorlagen": vorlagen}
 
 
-def analysieren(spiel: str, ziel: Optional[str] = None, log=print) -> dict:
-    """Spiel-ERPs lesen, gleiche Oberflächen/Skids per Textur-MD5 zusammenfassen, ``fahrbahn.json`` schreiben."""
+def analysieren(spiel: str, ziel: Optional[str] = None, log=print, vorschau: bool = True) -> dict:
+    """Spiel-ERPs lesen, gleiche Oberflächen/Skids per Textur-MD5 zusammenfassen, ``fahrbahn.json`` schreiben.
+
+    Mit ``vorschau`` entstehen fehlende Vorschaubilder neben der Katalogdatei (``vorschau/<art>/``)."""
     spiel = umgebung.spielordner_finden(spiel) or spiel
     if not os.path.isdir(os.path.join(spiel, "2025_asset_groups", "environment_package", "tracks")):
         raise VorlagenFehler("Not an F1 25 game folder: %s" % spiel)
@@ -411,7 +420,61 @@ def analysieren(spiel: str, ziel: Optional[str] = None, log=print) -> dict:
         json.dump(out, f, ensure_ascii=False, indent=1)
     log("Wrote %s (%d asphalt groups, %d skid groups)" % (
         ziel, len(asphalt["reihenfolge"]) - 1, len(skid["reihenfolge"]) - 1))
+    if vorschau:
+        vorschau_erzeugen(spiel, out, os.path.join(os.path.dirname(ziel), "vorschau"), log=log)
     return out
+
+
+def _textur_bild(spiel: str, strecke: str, kennung: str):
+    """Höchste Stufe einer Strecken-Textur (mit externen Mip-Dateien) als Pillow-Bild."""
+    from ego import grafik_textur
+    with erp.open_erp(_strecken_erp(spiel, strecke)) as a:
+        res = {r.identifier: r for r in a.resources}
+        r = res.get(kennung + ".image") or res.get(kennung)
+        if r is None:
+            raise VorlagenFehler("Textures missing in the game data for %s: %s" % (strecke, kennung))
+        textur = grafik.Textur.aus_ressource(r)
+    extern = None
+    pfad = grafik_textur.extern_datei_finden(textur, [os.path.join(spiel, g) for g in
+                                                      ("2025_asset_groups", "2021_asset_groups")] + [spiel])
+    if pfad:
+        extern = grafik_textur.extern_stufen(textur, pfad)
+    return grafik_textur.textur_bild(textur, extern)
+
+
+def vorschau_erzeugen(spiel: str, katalog: dict, ordner: str, *, ersetzen: bool = False, log=print) -> list:
+    """Fehlende Vorschaubilder aus dem Spielordner: Asphalt = Albedo verkleinert, Reifenspuren = Streifen hochkant.
+
+    Träger-Einträge (Portimão-Mod, keine Spielstrecke) bleiben, wie sie sind. Gibt die geschriebenen Dateien zurück."""
+    try:
+        from PIL import Image
+    except ImportError:
+        log("Previews skipped: Pillow is not installed")
+        return []
+    geschrieben = []
+    for art in ("asphalt", "skid"):
+        for key, e in ((katalog.get(art) or {}).get("vorlagen") or {}).items():
+            if e.get("traeger"):
+                continue
+            ziel = os.path.join(ordner, art, e.get("vorschau") or key + ".png")
+            if os.path.isfile(ziel) and not ersetzen:
+                continue
+            kennung = (e.get("slots") or {}).get("me_albedoMap") if art == "asphalt" else e.get("quelle")
+            if not kennung:
+                continue
+            try:
+                bild = _textur_bild(spiel, e.get("strecke") or key, kennung).convert("RGBA")
+            except (VorlagenFehler, OSError, ValueError) as fehler:
+                log("Preview %s/%s failed: %s" % (art, key, fehler))
+                continue
+            if art == "skid" and bild.width > bild.height:
+                bild = bild.transpose(Image.Transpose.ROTATE_90)
+            bild = bild.resize(VORSCHAU_GROESSE[art], Image.LANCZOS)
+            os.makedirs(os.path.dirname(ziel), exist_ok=True)
+            bild.save(ziel, optimize=True)
+            geschrieben.append(ziel)
+            log("Preview %s/%s" % (art, os.path.basename(ziel)))
+    return geschrieben
 
 
 def _strecken_erps(spiel: str):
@@ -443,6 +506,7 @@ if __name__ == "__main__":
     ap.add_argument("befehl", choices=("analysieren",), help="Rebuild fahrbahn.json from the game")
     ap.add_argument("spiel", help="F1 25 game folder")
     ap.add_argument("--ziel", default=DATEN, help="Output JSON path")
+    ap.add_argument("--ohne-vorschau", action="store_true", help="Do not create missing preview images")
     args = ap.parse_args()
     if args.befehl == "analysieren":
-        analysieren(args.spiel, args.ziel)
+        analysieren(args.spiel, args.ziel, vorschau=not args.ohne_vorschau)

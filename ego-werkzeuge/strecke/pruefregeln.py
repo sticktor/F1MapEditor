@@ -1027,15 +1027,15 @@ def fahrbahn_pruefen(asphalt_vorlage=None, skid_vorlage=None, m=None) -> set:
     m = m if m is not None else []
     gp = {"FAHRBAHN_UNBEKANNT", "FAHRBAHN_SPIELORDNER"}
     braucht_spiel = False
-    for art, wert, gruppe in (
-            ("track surface", asphalt_vorlage or "traeger", asphalt_vorlagen.asphalt_katalog()),
-            ("tyre marks", skid_vorlage or "traeger", asphalt_vorlagen.skid_katalog())):
-        if not wert:
+    for text, wert, katalog in (
+            ("Unknown track surface %r", asphalt_vorlage, asphalt_vorlagen.asphalt_katalog),
+            ("Unknown tyre marks %r", skid_vorlage, asphalt_vorlagen.skid_katalog)):
+        if not wert or wert == "traeger":       # Träger: nichts zu kopieren, Katalog nicht nötig
             continue
         try:
-            _key, ein = asphalt_vorlagen._aufloesen(gruppe, wert)
-        except asphalt_vorlagen.VorlagenFehler:
-            m.append(meldung("FAHRBAHN_UNBEKANNT", "Unknown %s %r" % (art, wert), ist=wert))
+            _key, ein = asphalt_vorlagen._aufloesen(katalog(), wert)
+        except (asphalt_vorlagen.VorlagenFehler, OSError, ValueError):
+            m.append(meldung("FAHRBAHN_UNBEKANNT", text % wert, ist=wert))
             continue
         if not ein.get("traeger"):
             braucht_spiel = True
