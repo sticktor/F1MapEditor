@@ -1484,7 +1484,12 @@ def geometrie_ersetzen(archiv: erp.ErpFile, kennung: str, geo: NeueGeometrie,
     """Ersetzt die Geometrie eines vorhandenen Modells im Archiv (alle LODs zeigen danach auf die
     neue Geometrie). Voraussetzung: alle Teilnetze des Modells nutzen dieselben Vertexpuffer.
     Ergebnis: ein Teilnetz mit dem Material des ersten Teilnetzes, im selben Vertexformat;
-    Bounding-Kugeln, AABB und Zähler werden neu berechnet. Gibt einen Bericht zurück."""
+    Bounding-Kugeln, AABB und Zähler werden neu berechnet. Gibt einen Bericht zurück.
+
+    Grenzen (Bestandsaufnahme 15.11.2026, docs/eigene_modelle.md Risiko 13): schreibt den Mesh-Eintrag fest als
+    ``(1, 0)`` und übernimmt Tangenten-``w`` und Lichtkarten-UV vom ersten Vorlagenvertex; richtig nur für Modelle
+    mit einer LOD und ohne gespiegelte UVs. Für neue Modelle ``ego/modell_import.py`` (``modell_bauen``,
+    ``modell_umsetzen``) nehmen."""
     idx = quelle or _als_index(archiv)
     if not kennung.endswith("?model"):
         kennung = modell_kennung(basis_kennung(kennung))

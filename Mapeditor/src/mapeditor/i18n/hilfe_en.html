@@ -8,7 +8,7 @@
     automatically.</li>
 <li><b>Fine-tuning:</b> drag points, change values on the right under <i>Properties</i>, check heights in the height profile.</li>
 <li><b>Check</b> (Ctrl+Enter): messages below under <i>Check</i>, a click jumps to the location.</li>
-<li><b>Build</b>: creates the package for the Track Installer; then test it in game and note the result under <i>Playtest</i>.</li>
+<li><b>Build</b>: creates the package for the Track Installer (<b>deprecated</b>: building for the EGO editor / Track Installer will be removed in a future version, use the Swofty Launcher target, now the default); then test it in game and note the result under <i>Playtest</i>.</li>
 </ol>
 <h3>Map</h3>
 <table cellspacing="4">
@@ -161,6 +161,7 @@ project's file <i>umgebung.json</i>.</p>
 <i>Place mountain</i> puts a mountain outside the track area (zoom out first; 10 … 2000 m high, up to 12 km from the
 centre; scenery on the horizon only). Dragging the centre moves it, height and radius are changed in the box, Del
 deletes. Shapes with a red outline are misplaced or are cut off at the edge of the track area.</p>
+<p><b>Own 3D models:</b> <i>Import model …</i> in the catalogue adds a model from Blender (export as glTF Binary <code>.glb</code>, "+Y Up", 1 unit = 1 m, front towards −Y, origin on the ground; also <code>.gltf</code> or <code>.obj</code>). The file is copied to the subfolder <code>modelle</code> of the project; the project must be saved in a folder. The model appears under <i>Own models</i> with a preview and notes (size, triangles, textures) and is placed, turned and grounded like any other model. Objects named <code>…_LOD1</code>, <code>…_LOD2</code> in the file become simpler versions for distance. Supported: base colour, colour texture, normal map, metal/roughness, transparency (<i>Alpha Blend</i>) and cut-outs (<i>Alpha Clip</i>), double-sided faces. Tick <i>Collision</i> in the details of an own model for an invisible box around its footprint that cars bounce off (off by default, the AI does not know it, check UM-11 warns on the road). <i>Remove own model</i> deletes it from the project. The checks MO-01 … MO-07 report problems. A step-by-step guide for Blender (units, front, export settings, materials, LODs, limits) is the file <code>docs\own_models_blender.md</code> in the Mapeditor folder (German short version: <code>own_models_blender.de.md</code>).</p>
 <h3>Build and transfer to the game</h3>
 <p><i>Build</i> suggests the next build name (e.g. testedit11) and shows the required and free storage.
 <b>Track code</b>: every code the game database knows (recommended: <i>sochi</i>); below it you see whether the

@@ -354,6 +354,7 @@ class MainWindow(QMainWindow):
         self.env_catalog = None
         self.env_issues = []
         self.env_job = self.env_preview_job = self.env_check_job = None
+        self.model_job, self.model_select_after = None, None
         # Kameras des Trägers (spiel_kameras.lage_aus_traeger, einmal je Träger im Arbeitsprozess geladen)
         self.camera_lage, self.camera_lage_path, self.camera_job, self.camera_error = None, None, None, None
         self.camera_groups = []
@@ -823,6 +824,9 @@ class MainWindow(QMainWindow):
         self.env_panel.model_chosen.connect(self._env_model_chosen)
         self.env_panel.preview_requested.connect(self._env_preview_request)
         self.env_panel.refresh_requested.connect(lambda: self.load_env_catalog(neu=True))
+        self.env_panel.import_requested.connect(self.import_own_model)
+        self.env_panel.remove_model_requested.connect(self.remove_own_model)
+        self.env_panel.collision_changed.connect(self.set_own_model_collision)
         self.env_panel.settings_changed.connect(self._env_settings_changed)
         self.env_panel.properties_requested.connect(self._env_properties)
         self.env_panel.ground_cover_toggled.connect(self._env_ground_cover)
@@ -3737,7 +3741,8 @@ class MainWindow(QMainWindow):
         self.env_panel.status.setText(tr("Loading catalogue …") if not neu else tr(("Rebuilding the catalogue "
                                                                                        "(this takes a while) …")))
         self.env_panel.reload_button.setEnabled(False)
-        self.env_job.start(worker_command(), {"task": "umgebung_katalog", "neu": neu, "toolkit": str(root)})
+        self.env_job.start(worker_command(), {"task": "umgebung_katalog", "neu": neu, "toolkit": str(root),
+                                              "projekt": self._model_project()})
 
     def _env_catalog_done(self, code, text):
         job, self.env_job = self.env_job, None
@@ -3749,6 +3754,10 @@ class MainWindow(QMainWindow):
             if code != 0 or "error" in result:
                 raise ValueError(result.get("error", text))
             self.set_env_catalog(result)
+            if self.model_select_after:
+                wanted, self.model_select_after = self.model_select_after, None
+                self.env_panel.category.setCurrentIndex(max(0, self.env_panel.category.findData("__projekt__")))
+                self.env_panel.select_models([wanted])
         except (ValueError, TypeError) as error:
             self.env_panel.set_catalog(self.env_catalog, tr("Catalogue not available: {error}", error=str(error)[:300]))
             if self.interactive and spielordner.ist_fehlt_meldung(error) and spielordner.anbieten(self):
@@ -3798,8 +3807,17 @@ class MainWindow(QMainWindow):
         self.map.viewport().update()
 
     def _env_preview_request(self, modell):
-        """Silhouette des gewählten Modells: aus dem Zwischenspeicher oder im Arbeitsprozess erzeugen."""
-        path = env_cache_folder() / (hashlib.sha1(modell.encode("utf-8")).hexdigest()[:20] + ".png")
+        """Silhouette des gewählten Modells: aus dem Zwischenspeicher oder im Arbeitsprozess erzeugen. Eigene Modelle
+        (Quelle ``projekt``) bekommen ein Schrägbild aus ihrer Datei, Schlüssel mit dem Dateistand."""
+        eintrag = (self.env_panel.index or {}).get(modell) or {}
+        schluessel = modell
+        if eintrag.get("quelle") == "projekt":
+            datei = Path(self._model_project() or ".") / "modelle" / str(eintrag.get("datei", ""))
+            try:
+                schluessel = "%s|%s|%s" % (modell, datei, datei.stat().st_mtime_ns)
+            except OSError:
+                schluessel = "%s|%s" % (modell, datei)
+        path = env_cache_folder() / (hashlib.sha1(schluessel.encode("utf-8")).hexdigest()[:20] + ".png")
         if path.is_file():
             self.env_panel.set_preview(modell, path)
             return
@@ -3814,7 +3832,129 @@ class MainWindow(QMainWindow):
         self.env_preview_job = ProcessJob(self)
         self.env_preview_job.done.connect(lambda code, text, modell=modell, path=path: self._env_preview_done(modell, path, code, text))
         self.env_preview_job.start(worker_command(), {"task": "umgebung_vorschau", "modell": modell, "pfad": str(path),
-                                                      "groesse": 160, "toolkit": str(root)})
+                                                      "groesse": 160, "toolkit": str(root),
+                                                      "projekt": self._model_project()})
+
+    # ------------------------------------------------------------------ eigene 3D-Modelle (M4)
+    def _model_project(self):
+        """Projektordner für eigene Modelle (``<projekt>/modelle``) oder None (Projekt ohne Ordner)."""
+        folder = getattr(self.document.project, "folder", None)
+        return str(folder) if folder else None
+
+    def import_own_model(self, path=None, lods=None):
+        """Eigenes 3D-Modell ins Projekt übernehmen (Arbeitsprozess) und danach im Katalog wählen."""
+        project = self._model_project()
+        if not project or self.document.project.readonly:
+            QMessageBox.information(self, tr("Import model"), tr("Save the project in a folder first: own models are "
+                                                                   "stored in the subfolder modelle of the project."))
+            return
+        if self.model_job:
+            return
+        if path is None:
+            path, _ = QFileDialog.getOpenFileName(self, tr("Import model"), "",
+                                                  tr("3D models (*.glb *.gltf *.obj);;glTF Binary (*.glb)"))
+            if not path:
+                return
+        try:
+            root = toolkit_path(self.document.project.manifest.get("werkzeugkasten"))
+        except ValueError as error:
+            QMessageBox.warning(self, tr("Import model"), meldung(error))
+            return
+        self.model_job = ProcessJob(self)
+        self.model_job.done.connect(lambda code, text, path=path: self._model_import_done(path, code, text))
+        self.status_label.setText(tr("Importing model {datei} …", datei=Path(path).name))
+        self.model_job.start(worker_command(), {"task": "modell_importieren", "projekt": project, "datei": str(path),
+                                                "lods": [str(x) for x in (lods or [])], "toolkit": str(root)})
+
+    def _model_import_done(self, path, code, text):
+        job, self.model_job = self.model_job, None
+        if job:
+            job.deleteLater()
+        try:
+            result = json.loads(text)
+            if code != 0 or "error" in result:
+                raise ValueError(result.get("error", text))
+        except (ValueError, TypeError) as error:
+            if self.interactive:
+                QMessageBox.warning(self, tr("Import model"), tr("{datei} could not be imported:\n{error}",
+                                                                 datei=Path(path).name, error=meldung(str(error))[:600]))
+            self.status_label.setText(tr("Model not imported: {error}", error=meldung(str(error))[:200]))
+            return
+        stat = result.get("statistik") or {}
+        notes = [meldung(t) for t in list(stat.get("warnungen") or []) + list(stat.get("hinweise") or [])]
+        self.status_label.setText(tr("Model usr_{name} imported ({anzahl} triangles). Choose it in the catalogue and "
+                                     "click the map to place it.", name=result.get("name", ""),
+                                     anzahl=zahl((stat.get("dreiecke") or [0])[0], 0)))
+        if notes and self.interactive:
+            QMessageBox.information(self, tr("Import model"), "\n".join(["usr_" + result.get("name", "")] + ["• " + n for n in notes[:8]]))
+        self.model_select_after = result.get("modell")
+        self.load_env_catalog()
+
+    def remove_own_model(self, name):
+        """Eigenes Modell samt Dateien aus dem Projekt entfernen (nach Rückfrage)."""
+        project = self._model_project()
+        if not project or not name or self.model_job:
+            return
+        if self.interactive and QMessageBox.question(
+                self, tr("Remove own model"), tr("Delete usr_{name} and its files from the project folder? Placed "
+                                                  "objects stay and are reported as unknown.", name=name)) != QMessageBox.Yes:
+            return
+        try:
+            root = toolkit_path(self.document.project.manifest.get("werkzeugkasten"))
+        except ValueError as error:
+            QMessageBox.warning(self, tr("Remove own model"), meldung(error))
+            return
+        self.model_job = ProcessJob(self)
+        self.model_job.done.connect(lambda code, text, name=name: self._model_remove_done(name, code, text))
+        self.model_job.start(worker_command(), {"task": "modell_entfernen", "projekt": project, "name": name,
+                                                "toolkit": str(root)})
+
+    def set_own_model_collision(self, name, an):
+        """M5b: Kollisionsquader eines eigenen Modells ein-/ausschalten (``modelle.json`` → ``kollision``)."""
+        project = self._model_project()
+        if not project or not name or self.model_job:
+            return
+        try:
+            root = toolkit_path(self.document.project.manifest.get("werkzeugkasten"))
+        except ValueError as error:
+            QMessageBox.warning(self, tr("Collision"), meldung(error))
+            return
+        self.model_job = ProcessJob(self)
+        self.model_job.done.connect(lambda code, text, name=name, an=an: self._model_collision_done(name, an, code, text))
+        self.model_job.start(worker_command(), {"task": "modell_aendern", "projekt": project, "name": name,
+                                                "optionen": {"kollision": "quader" if an else "keine"},
+                                                "toolkit": str(root)})
+
+    def _model_collision_done(self, name, an, code, text):
+        job, self.model_job = self.model_job, None
+        if job:
+            job.deleteLater()
+        try:
+            result = json.loads(text)
+            if code != 0 or "error" in result:
+                raise ValueError(result.get("error", text))
+        except (ValueError, TypeError) as error:
+            self.status_label.setText(tr("Collision not changed: {error}", error=meldung(str(error))[:200]))
+            self.load_env_catalog()
+            return
+        self.status_label.setText(tr("Model usr_{name}: collision on.", name=name) if an else
+                                  tr("Model usr_{name}: collision off.", name=name))
+        self.load_env_catalog()
+
+    def _model_remove_done(self, name, code, text):
+        job, self.model_job = self.model_job, None
+        if job:
+            job.deleteLater()
+        try:
+            result = json.loads(text)
+            if code != 0 or "error" in result:
+                raise ValueError(result.get("error", text))
+        except (ValueError, TypeError) as error:
+            self.status_label.setText(tr("Model not removed: {error}", error=meldung(str(error))[:200]))
+            return
+        self.status_label.setText(tr("Model usr_{name} removed.", name=name))
+        self.env_panel.disarm_models()
+        self.load_env_catalog()
 
     def _env_preview_done(self, modell, path, code, text):
         job, self.env_preview_job = self.env_preview_job, None
@@ -4006,7 +4146,8 @@ class MainWindow(QMainWindow):
         except ValueError:
             return
         payload = {"task": "umgebung_pruefen", "umgebung": copy.deepcopy(project.umgebung), "raw": copy.deepcopy(project.raw),
-                   "basis": str(project.basis), "shift": project.manifest.get("versatz", [0, 0, 0]), "toolkit": str(root)}
+                   "basis": str(project.basis), "shift": project.manifest.get("versatz", [0, 0, 0]), "toolkit": str(root),
+                   "projekt": self._model_project()}
         revision = self.document.env_revision, self.document.revision
         self.env_check_job = ProcessJob(self)
         self.env_check_job.done.connect(lambda code, text: self._env_check_done(code, text, revision))
@@ -4159,7 +4300,8 @@ class MainWindow(QMainWindow):
         old = self.build_dialog
         if old is not None and old.isVisible() and not old.job and not old.inject_job and not old.status_job:
             fields = (old.name.text(), old.note.text(), old.code.currentData(), old.track_name.text(),
-                      old.pvs.currentData(), old.advanced_toggle.isChecked(), old.game_state, old.status_read)
+                      old.pvs.currentData(), old.advanced_toggle.isChecked(), old.game_state, old.status_read,
+                      old.target.currentData())
             old.close()
             self.open_build()                          # Baudialog in der neuen Sprache, Eingaben übernommen
             d = self.build_dialog
@@ -4167,6 +4309,7 @@ class MainWindow(QMainWindow):
             d.note.setText(fields[1])
             d.track_name.setText(fields[3])
             d.pvs.setCurrentIndex(max(0, d.pvs.findData(fields[4])))
+            d.target.setCurrentIndex(max(0, d.target.findData(fields[8])))
             d.advanced_toggle.setChecked(fields[5])
             if d.status_job is None:
                 d.game_state, d.status_read = fields[6], fields[7]
@@ -4190,12 +4333,12 @@ class MainWindow(QMainWindow):
         self.autosave_timer.stop()
         self.env_check_timer.stop()
         self._stop_env_check()
-        for job in (self.env_job, self.env_preview_job):
+        for job in (self.env_job, self.env_preview_job, self.model_job):
             if job:
                 job.done.disconnect()
                 job.process.kill()
                 job.process.waitForFinished(500)
-        self.env_job = self.env_preview_job = None
+        self.env_job = self.env_preview_job = self.model_job = None
         if not getattr(self, "_rebuilding", False):
             self.werkzeug_bild.beenden()
         if self.document.undo.isClean():

@@ -219,6 +219,7 @@ def test_build_options_note_and_nonmodal(window, tmp_path):
     assert not d.advanced.isVisible()
     d.advanced_toggle.setChecked(True)
     assert d.advanced.isVisible()
+    d.target.setCurrentIndex(d.target.findData("ego"))      # Streckencode gibt es nur beim (veralteten) Track Installer
     d.code.setCurrentIndex(d.code.findData("hanoi"))
     assert "hanoi" in d.profile_hint.text() and d.options()["streckencode"] == "hanoi"
     d.close()

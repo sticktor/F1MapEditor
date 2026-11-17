@@ -1,5 +1,11 @@
 Mapeditor is a Windows editor for designing your own tracks for F1 25.
 
+## New in 0.5.0
+
+- **Your own 3D models from Blender:** export a model as glTF (`.glb`), press *Import model …* in the Environment tab, and place it like any other object. The build creates everything the model needs (geometry, levels of detail, materials, textures) and puts it in your package, no game files are used for it. Tested in the game: several materials, textures, three levels of detail and tens of thousands of triangles. Materials with colour, colour texture, normal map, metal/roughness, transparency (glass) and cut-outs (fences, leaves) work, also double-sided faces. Tick *Collision* for an invisible box around a model that cars bounce off. New checks MO-01 to MO-07 and UM-11 (collision box on the road). Step-by-step guide: `Mapeditor/docs/own_models_blender.md` in the source and in the `docs` folder of the ZIP (German short version: `own_models_blender.de.md`); the F1 help names it
+- **Building for the EGO GameDatabases Editor / Track Installer is deprecated** and will be removed in a future version. The Build window shows a warning with a button to switch to Swofty Launcher, which is now the default target for projects without a saved choice
+- The recommended build profile of the command line tools now also adapts the AI driving data, so the driving aid's braking zones match your corners
+
 ## New in 0.4.0
 
 - **See which way objects face:** buildings, tents, big screens and grandstands are drawn as their real footprint with an arrow to their front. Rotate them with the round handle, Ctrl+wheel or R; T (Face the track) turns them towards the track. If the arrow is wrong for a model, Front +90° fixes it for all objects of that model
@@ -58,7 +64,7 @@ Mapeditor is a Windows editor for designing your own tracks for F1 25.
 
 ## Download
 
-`Mapeditor-0.4.0-win64.zip`: unpack the whole folder and start `Mapeditor.exe`. The program is not signed, so Windows may
+`Mapeditor-0.5.0-win64.zip`: unpack the whole folder and start `Mapeditor.exe`. The program is not signed, so Windows may
 show a warning.
 
 ## What you need

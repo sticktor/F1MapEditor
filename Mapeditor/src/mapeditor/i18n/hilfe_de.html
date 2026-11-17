@@ -8,7 +8,7 @@
     Vorschau berechnet sich danach automatisch.</li>
 <li><b>Feinarbeit:</b> Punkte ziehen, Werte rechts unter <i>Eigenschaften</i> ändern, Höhen im Höhenprofil prüfen.</li>
 <li><b>Prüfen</b> (Strg+Enter): Meldungen unten unter <i>Prüfung</i>, Klick springt zur Stelle.</li>
-<li><b>Bauen</b>: erzeugt das Paket für den Track Installer; danach im Spiel testen und unter <i>Spieltest</i> notieren.</li>
+<li><b>Bauen</b>: erzeugt das Paket für den Track Installer (<b>veraltet</b>: der Bau für EGO-Editor / Track Installer entfällt in einer künftigen Version, nimm das Ziel Swofty Launcher, jetzt der Standard); danach im Spiel testen und unter <i>Spieltest</i> notieren.</li>
 </ol>
 <h3>Karte</h3>
 <table cellspacing="4">
@@ -165,6 +165,7 @@ Streckenbereich (Höhe −60 … 200 m, negativ = Senke; sichtbar und befahrbar,
 <i>Berg setzen</i> setzt einen Berg außerhalb des Streckenbereichs (dafür herauszoomen; 10 … 2000 m hoch, bis 12 km von
 der Mitte; nur Kulisse am Horizont). Mitte ziehen verschiebt, Höhe und Radius ändern sich im Feld, Entf löscht. Rot
 umrandete Formen liegen falsch oder werden am Rand des Streckenbereichs abgeschnitten.</p>
+<p><b>Eigene 3D-Modelle:</b> <i>Modell importieren …</i> im Katalog übernimmt ein Modell aus Blender (Export als glTF Binary <code>.glb</code>, „+Y Up“, 1 Einheit = 1 m, Vorderseite nach −Y, Ursprung am Boden; auch <code>.gltf</code> oder <code>.obj</code>). Die Datei wird in den Unterordner <code>modelle</code> des Projekts kopiert; das Projekt muss in einem Ordner gespeichert sein. Das Modell erscheint unter <i>Eigene Modelle</i> mit Vorschau und Hinweisen (Größe, Dreiecke, Texturen) und wird wie jedes andere Modell platziert, gedreht und auf den Boden gesetzt. Objekte namens <code>…_LOD1</code>, <code>…_LOD2</code> in der Datei werden zu einfacheren Fassungen für die Ferne. Unterstützt: Grundfarbe, Farbtextur, Normalenkarte, Metall/Rauheit, Transparenz (<i>Alpha Blend</i>) und Ausschnitte (<i>Alpha Clip</i>), doppelseitige Flächen. Das Häkchen <i>Collision</i> in den Angaben eines eigenen Modells setzt einen unsichtbaren Quader um die Grundfläche, an dem Autos abprallen (Standard aus, die KI kennt ihn nicht, Prüfregel UM-11 warnt auf der Fahrbahn). <i>Eigenes Modell entfernen</i> löscht es aus dem Projekt. Die Prüfregeln MO-01 … MO-07 melden Probleme. Eine Schritt-für-Schritt-Anleitung für Blender (Einheiten, Vorderseite, Exporteinstellungen, Materialien, LODs, Grenzen) ist die Datei <code>docs\own_models_blender.de.md</code> im Mapeditor-Ordner (ausführlich auf Englisch: <code>own_models_blender.md</code>).</p>
 <h3>Bauen und ins Spiel übertragen</h3>
 <p><i>Bauen</i> schlägt den nächsten Baunamen vor (z. B. testedit11) und zeigt Speicherbedarf und freien Platz.
 <b>Streckencode</b>: alle Codes, die die Spieldatenbank kennt (empfohlen <i>sochi</i>); darunter steht, ob der Code

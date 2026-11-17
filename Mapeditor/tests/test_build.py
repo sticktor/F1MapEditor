@@ -436,9 +436,10 @@ def test_hard_cancel_stops_child_process_heartbeat(app, tmp_path):
 
 
 def test_ki_profile_option_in_command(tmp_path):
-    """KI-Fahrdaten aus dem eigenen Profil (25.10.2026): nur mit Option, dann ``--ki-daten profil``."""
+    """KI-Fahrdaten aus dem eigenen Profil (25.10.2026): mit Option ``--ki-daten profil``, sonst ausdrücklich
+    ``vorlage`` (seit 15.11.2026 gehört ``profil`` zum Bauprofil empfohlen)."""
     ohne = build_command(ROOT / "ego-werkzeuge", tmp_path / "projekt", tmp_path / "arbeit", tmp_path / "pakete")
     mit = build_command(ROOT / "ego-werkzeuge", tmp_path / "projekt", tmp_path / "arbeit2", tmp_path / "pakete",
                         ki_profil=True)
-    assert "--ki-daten" not in ohne
+    assert ohne[-2:] == ["--ki-daten", "vorlage"]
     assert mit[-2:] == ["--ki-daten", "profil"]

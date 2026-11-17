@@ -114,6 +114,7 @@ def fake_status(tmp_path, state=ZUSTAND):
 def test_dialog_zeigt_alle_codes_mit_zustand(window, tmp_path):
     window.open_build()
     d = window.build_dialog
+    d.target.setCurrentIndex(d.target.findData("ego"))
     assert [d.code.itemData(i) for i in range(d.code.count())] == list(BUILD_CODES)
     assert d.code.currentData() == "sochi" and d.status_job is None          # Tests lesen das Spiel nicht
     d.read_game, d.status_command = True, fake_status(tmp_path)
@@ -159,6 +160,7 @@ def test_dialog_ziel_swofty(window, tmp_path):
 def test_sprachwechsel_mit_offenem_baudialog(window, tmp_path):
     window.open_build()
     d = window.build_dialog
+    d.target.setCurrentIndex(d.target.findData("ego"))
     d.read_game, d.status_command = True, fake_status(tmp_path)
     d.refresh_game_status()
     wait_until(lambda: d.status_job is None)

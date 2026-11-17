@@ -166,7 +166,7 @@ def build_command(toolkit, project_folder, output, packages, name="entwurf", pyt
                      "--abbruch-datei", str(writable_path(root / (name + ".abbruch"))),
                      "--traeger", str(Path(carrier or default_carrier(toolkit)).resolve()),
                      "--traeger-cache", str(writable_path(work / "traeger-cache")),
-                     "--pruefsummen", "--arbeit-aufraeumen"] + (["--ki-daten", "profil"] if ki_profil else []) \
+                     "--pruefsummen", "--arbeit-aufraeumen"] + ["--ki-daten", "profil" if ki_profil else "vorlage"] \
         + _option_args(options) + (["--umgebung", str(Path(umgebung).resolve())] if umgebung else [])
 
 
@@ -983,7 +983,70 @@ def calculate_env_catalog(request):
             modul.vorderseiten_sicherstellen(katalog_daten=katalog, neu=bool(request.get("neu")))
         for eintrag in katalog.get("modelle", []):
             eintrag["vorne_grad"], eintrag["vorne_quelle"] = modul.vorderseite(eintrag["modell"], eintrag)
+    eigene = _eigene_modelle_katalog(request)
+    if eigene is not None:
+        katalog["modelle"] = list(eigene["modelle"]) + list(katalog.get("modelle", []))
+        katalog["eigene_modelle"] = eigene["tabelle"]
     return katalog
+
+
+def _eigene_modelle_modul(toolkit=None):
+    """Modul ``strecke.eigene_modelle`` (M1, 16.11.2026) oder None, wenn der Werkzeugkasten es noch nicht hat."""
+    try:
+        root = toolkit_path(toolkit)
+        sys.dont_write_bytecode = True
+        if str(root) not in sys.path:
+            sys.path.insert(0, str(root))
+        from strecke import eigene_modelle
+    except (ValueError, ImportError, OSError):
+        return None
+    return eigene_modelle
+
+
+def _eigene_modelle_katalog(request):
+    """Eigene Modelle des Projekts als Katalogeinträge (Quelle ``projekt``) und die Tabelle mit Statistik;
+    None ohne Projektordner oder ohne Modul."""
+    projekt = request.get("projekt")
+    em = _eigene_modelle_modul(request.get("toolkit"))
+    if not projekt or em is None or not Path(projekt).is_dir():
+        return None
+    try:
+        daten = em.aktualisieren(projekt)
+        eintraege = em.katalogeintraege(projekt, auffrischen=False)
+    except (ValueError, OSError) as error:
+        return {"modelle": [], "tabelle": {"fehler": str(error), "modelle": []}}
+    return {"modelle": eintraege, "tabelle": daten}
+
+
+def calculate_model_import(request):
+    """Arbeitsprozess: eigenes 3D-Modell in ``<projekt>/modelle`` übernehmen (``eigene_modelle.hinzufuegen``)."""
+    em = _eigene_modelle_modul(request.get("toolkit"))
+    if em is None:
+        raise ValueError(tr("The toolkit cannot import own models yet (strecke/eigene_modelle.py is missing)."))
+    optionen = {k: v for k, v in (request.get("optionen") or {}).items() if v is not None}
+    eintrag = em.hinzufuegen(request["projekt"], request["datei"], name=request.get("name"),
+                             lods=request.get("lods") or (), ersetzen=bool(request.get("ersetzen")), **optionen)
+    eintrag["modell"] = em.kennung(eintrag["name"])
+    return eintrag
+
+
+def calculate_model_remove(request):
+    """Arbeitsprozess: eigenes Modell aus ``<projekt>/modelle`` entfernen (Eintrag und Dateien)."""
+    em = _eigene_modelle_modul(request.get("toolkit"))
+    if em is None:
+        raise ValueError(tr("The toolkit cannot import own models yet (strecke/eigene_modelle.py is missing)."))
+    return em.entfernen(request["projekt"], request["name"])
+
+
+def calculate_model_change(request):
+    """Arbeitsprozess: Einstellungen eines eigenen Modells ändern (``eigene_modelle.aendern``, z. B. ``kollision``)."""
+    em = _eigene_modelle_modul(request.get("toolkit"))
+    if em is None:
+        raise ValueError(tr("The toolkit cannot import own models yet (strecke/eigene_modelle.py is missing)."))
+    optionen = {k: v for k, v in (request.get("optionen") or {}).items()}
+    if "kollision" in optionen and "kollision" not in getattr(em, "STANDARD", {}):
+        raise ValueError(tr("The toolkit cannot give own models a collision yet (update the toolkit)."))
+    return em.aendern(request["projekt"], request["name"], **optionen)
 
 
 def calculate_env_preview(request):
@@ -993,6 +1056,12 @@ def calculate_env_preview(request):
         raise ValueError(tr("The toolkit does not contain environment models yet (strecke/umgebung.py is missing)."))
     ziel = writable_path(request["pfad"])
     ziel.parent.mkdir(parents=True, exist_ok=True)
+    name = str(request["modell"]).rsplit("/", 1)[-1]
+    em = _eigene_modelle_modul(request.get("toolkit")) if request.get("projekt") else None
+    if em is not None and name.startswith(em.PRAEFIX):     # eigenes Modell: Schrägbild aus der Datei im Projekt
+        eintrag = em.eintrag(em.laden(request["projekt"]), name[len(em.PRAEFIX):])
+        em.vorschau(em.dateien(request["projekt"], eintrag), str(ziel), int(request.get("groesse", 160)))
+        return {"pfad": str(ziel)}
     return {"pfad": str(modul.vorschau(request["modell"], str(ziel), int(request.get("groesse", 160))))}
 
 
@@ -1009,10 +1078,11 @@ def calculate_env_check(request):
     from strecke import definition, erzeugung
     shift = request.get("shift", [0, 0, 0])
     defn = definition.aus_dict(request["raw"], basisordner=request.get("basis", "."))
+    projekt = {"projekt": request["projekt"]} if request.get("projekt") else {}   # eigene Modelle (M2/M4)
     try:
-        meldungen = modul.pruefen(request["umgebung"], defn, shift)
+        meldungen = modul.pruefen(request["umgebung"], defn, shift, **projekt)
     except (AttributeError, TypeError, KeyError):
-        meldungen = modul.pruefen(request["umgebung"], erzeugung.berechnen(defn), shift)
+        meldungen = modul.pruefen(request["umgebung"], erzeugung.berechnen(defn), shift, **projekt)
     return {"issues": [issue_from_message(m) for m in meldungen]}
 
 
@@ -1048,6 +1118,9 @@ def worker_main():
                   calculate_env_catalog(request) if task == "umgebung_katalog" else
                   calculate_env_preview(request) if task == "umgebung_vorschau" else
                   calculate_env_check(request) if task == "umgebung_pruefen" else
+                  calculate_model_import(request) if task == "modell_importieren" else
+                  calculate_model_remove(request) if task == "modell_entfernen" else
+                  calculate_model_change(request) if task == "modell_aendern" else
                   calculate_game_tracks(request) if task == "spielstrecken" else
                   calculate_camera_layout(request) if task == "kameras_lage" else
                   calculate_template(request) if task else calculate_preview(request))

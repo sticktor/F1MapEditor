@@ -819,6 +819,10 @@ def geometrie_einsetzen(archiv: erp.ErpFile, netz_npz: str, **optionen) -> dict:
         trn_flags (str, 'kanten'): Dreiecksflags der Fahrphysik; 'kanten' = ego.trn_erzeugen.kantenflags
             (Bit gelöscht an freien Rändern wie im Original), 'alle7' = alle Bits gesetzt (bis v13).
         vorlagen (dict): vorberechnete ``vorlagen_lesen``-Ergebnisse (sonst aus dem Archiv).
+        kollision (list, None): M5b, Paare (Umgebungsobjekt, Katalogeintrag) aus ``kollision.objekte``; je Paar ein
+            Quader aus vier ``SCON``-Seitenflächen in der Fahrphysik (Höhe wie die Instanz, ``umgebung.bodenlage`` auf
+            den eben erzeugten sichtbaren Flächen). Ohne Paare bleibt alles wie bisher (gleiche Bytes).
+        kollision_hinweise (list[str]): Hinweise aus ``kollision.objekte`` für den Bericht.
     Diagnose-Optionen der Fahrphysik (AP15, Standard = bisheriges Verhalten):
         hoehe_versatz (float, 0.0): Geometrie (sichtbar, Physik, Grundfläche) um diesen Wert in y
             verschieben, Streckenlogik bleibt. −0,2 ergibt Portimãos Abstand Logik ↔ Physik
@@ -950,6 +954,14 @@ def geometrie_einsetzen(archiv: erp.ErpFile, netz_npz: str, **optionen) -> dict:
     if grund is not None and physik_umfang == 'voll':
         physik_anfuegen(grund['physik'], grund['positionen'], GRUND[1], ist_grund=True)
         trn_zahlen['grundflaeche'] = int(len(grund['physik']))
+    kollision_bericht = None
+    if optionen.get('kollision'):   # M5b: Kollisionsquader eigener Modelle (strecke/kollision.py)
+        from . import kollision as kol, umgebung as umg
+        quader, ohne = kol.quader_berechnen(optionen['kollision'], umg.sichtflaechen(archiv), platzierung.VERSATZ)
+        kp, kt = kol.netz(quader)
+        physik_anfuegen(kt, kp, kol.CODE)
+        trn_zahlen['kollision'] = int(len(kt))
+        kollision_bericht = kol.bericht(quader, ohne, optionen.get('kollision_hinweise') or [])
     pv = np.concatenate(p_teile)
     pt = np.concatenate(t_teile)
     pa = np.concatenate(a_teile)
@@ -1012,6 +1024,8 @@ def geometrie_einsetzen(archiv: erp.ErpFile, netz_npz: str, **optionen) -> dict:
                              umfang=physik_umfang, kante_max=physik_kante_max, hoehe_versatz=hoehe_versatz,
                              flags=dict(art=trn_flags, werte=dict(zip(*[x.tolist() for x in
                                                                         np.unique(flags, return_counts=True)]))))
+    if kollision_bericht is not None:
+        bericht['physik']['kollision'] = kollision_bericht
     bericht['hoehen'] = dict(strecke_boden=(float(boden_y.min()), float(boden_y.max())),
                              strecke_gesamt=(float(pos[:, 1].min()), float(pos[:, 1].max())),
                              physik=(float(pv[:, 1].min()), float(pv[:, 1].max())))

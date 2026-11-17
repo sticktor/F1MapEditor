@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.0
+
+- Own 3D models from Blender: Import model … in the environment catalogue adds a model (glTF .glb, also .gltf/.obj) to the project (subfolder modelle). It appears under Own models with a preview and notes and is placed, turned and grounded like any other model. The build creates the game resources of the model (geometry, levels of detail, materials, textures) and puts them in your package, no game files are copied for it. Objects named …_LOD1, …_LOD2 become distance versions. Supported: base colour, colour texture, normal map, metal/roughness, transparency (Alpha Blend), cut-outs (Alpha Clip) and double-sided faces. Optional box collision per model (Collision tick in the details, off by default). New checks MO-01 … MO-07 and UM-11 (collision box touches the road or pit lane). Guide for Blender users: docs/own_models_blender.md (German short version: own_models_blender.de.md); also in the ZIP (docs folder) and named in the F1 help
+- The build profile used by the command line tools (recommended) now also adapts the AI driving data, so the driving aid's braking zones match the corners of your track, as the editor option already did
+- Building for the EGO GameDatabases Editor / Track Installer (including "Transfer to game") is deprecated and will be
+  removed in a future version: the build dialog shows a warning banner with a button to switch to Swofty Launcher, and
+  every such build logs a warning. Swofty Launcher is now the default build target for projects without a saved choice
+  (saved choices are kept)
+
 ## 0.4.0
 
 - Korean as third interface language (contributed by [Ftoaster](https://github.com/Ftoaster), PR #6): View → Language

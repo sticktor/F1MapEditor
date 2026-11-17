@@ -55,6 +55,8 @@ sofort ohne Neustart; Projekt, Rückgängig-Verlauf, Vorschau und Kartenausschni
   „Vorschau wird berechnet …“ mit *Abbrechen*, rechts die Prüfsumme (z. B. „0 Fehler · 2 Warnungen · 1 Hinweis“,
   Klick öffnet „Prüfung“) und das aktive Werkzeug.
 - **F1** öffnet die gegliederte Bedienhilfe (Schnellstart, Karte, Segmente, Eigenschaften, Farben).
+- **Eigene 3D-Modelle aus Blender (16.11.2026):** Reiter *Environment* → *Import model …*; Anleitung für Endnutzer:
+  [`docs/own_models_blender.md`](docs/own_models_blender.md) (englisch), Kurzfassung [`docs/own_models_blender.de.md`](docs/own_models_blender.de.md).
 - **Höhe/Steigung (25.10.2026):** Im Reiter *Höhenprofil* ist jeder Kontrollpunkt bzw. jedes Segmentende ein
   Griff. Ziehen ändert die Höhe (0,1-m-Raster, ein Undo-Schritt; gewählte Punkte gemeinsam), Rahmen wählt mehrere,
   ↑/↓ 0,1 m (Umschalt 1 m), Rechtsklick: *Gleichmäßige Steigung (Rampe)*, *Auf gleiche Höhe*, *Glätten*,
@@ -199,6 +201,8 @@ sofort ohne Neustart; Projekt, Rückgängig-Verlauf, Vorschau und Kartenausschni
   der Baudialog offen; Projektwechsel und Schließen warten auf das Bauende.
 - Ergebnis zeigt Paketpfad, Größe, SHA-256, Prüfbericht und technischen Bericht.
   „Im Explorer zeigen“ markiert das ZIP; „Prüfbericht öffnen“ öffnet die JSON-Datei.
+  **Veraltet (deprecated, 15.11.2026):** Der Bau für EGO-Editor / Track Installer bleibt vorerst, zeigt aber einen
+  Warnbalken und eine Bauwarnung (DEP-01); Standardziel ist Swofty Launcher (`docs/ego_veraltet.md`).
   **Erstinstallation** eines Streckencodes extern im **Track Installer** (freier Slot), danach mit
   **`paket_tool.py installiert`** vergleichen.
 - **Ins Spiel übertragen …** (Schnellaustausch, `injektor_tool.py`): zuletzt gebautes Paket des Projekts in den

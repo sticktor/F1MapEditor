@@ -22,7 +22,9 @@ Abhängigkeiten: nur numpy und ``strecke``-Module; ERP-Zugriffe nur in ``logik_a
 
 from __future__ import annotations
 
+import json
 import math
+import os
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Sequence
 
@@ -113,6 +115,7 @@ QUELLEN = {
     "paket": "ego-werkzeuge/paket_tool.py",
     "recherche": "docs/recherche_generierung.md",
     "umgebung": "docs/zwischenstand/umgebung_vertrag.md",
+    "modelle": "docs/eigene_modelle_m1.md",
 }
 
 
@@ -324,6 +327,28 @@ _R = [
           "(docs/mapeditor/objekte_ausrichtung.md)"),
     Regel("UMG_OHNE_BODEN", "UM-10", WARNUNG, "bau", "Environment object left out: no ground under it",
           QUELLEN["umgebung"], "Höhe nur aus den sichtbaren Flächen im Streckenbereich (umgebung.bodenlage)"),
+    Regel("UMG_KOLLISION_FAHRBAHN", "UM-11", WARNUNG, "generator",
+          "Collision box of an own model overlaps the road or the pit lane", "docs/eigene_modelle_m5b.md",
+          "M5b: Quader als SCON-Mauerflächen in der TRN~; auf Asphalt, Randstein, Linie, Boxengasse oder Startbox "
+          "prallen Autos und KI dagegen (strecke/kollision.py)"),
+    # ---------------------------------------------------------------- Eigene 3D-Modelle (M3, strecke/eigene_modelle.py)
+    Regel("MOD_DATEI", "MO-01", FEHLER, "eingabe", "Own model cannot be used: file missing, unreadable or too large",
+          QUELLEN["modelle"], "eigene_modelle.untersuchen: unlesbar, komprimiert, ohne Dreiecke, > 250.000 Dreiecke "
+          "(größtes Spielmodell 254.000), LOD-Lücke; der Bau lässt solche Modelle aus"),
+    Regel("MOD_DREIECKE", "MO-02", WARNUNG, "eingabe", "Own model has many triangles (more than 50,000 in LOD 0)",
+          QUELLEN["modelle"], "Bestand des Spiels (analyse/modell_formate.py): LOD 0 Median 1.100, p90 10.900, "
+          "p99 41.800 Dreiecke"),
+    Regel("MOD_GROESSE", "MO-03", WARNUNG, "eingabe", "Own model is implausibly small or large (check the unit)",
+          QUELLEN["modelle"], "Größte Ausdehnung unter 5 cm oder über 500 m: meist cm statt m beim Export"),
+    Regel("MOD_URSPRUNG", "MO-04", WARNUNG, "eingabe", "Origin of an own model lies far beside the model",
+          QUELLEN["modelle"], "Drehen, Platzieren und Bodenlage beziehen sich auf den Ursprung"),
+    Regel("MOD_HINWEIS", "MO-05", HINWEIS, "eingabe", "Note on an own model (adapted or left out by the conversion)",
+          QUELLEN["modelle"], "Texturen umgerechnet, Träger ohne object_alpha/object_mask (Transparenz dann deckend, M5a), "
+          "Normalen/UV fehlen, über dem Ursprung"),
+    Regel("MOD_SPEICHER", "MO-06", WARNUNG, "eingabe", "Own models need a lot of memory (more than 256 MB)",
+          QUELLEN["modelle"], "Texturen und Geometrie eigener Modelle liegen vollständig im ERP und ständig im Speicher"),
+    Regel("MOD_UNBENUTZT", "MO-07", HINWEIS, "eingabe", "Own model is not placed anywhere",
+          QUELLEN["modelle"], "Nur platzierte Modelle kommen ins Paket"),
 ]
 REGELN: Dict[str, Regel] = {r.id: r for r in _R}
 assert len(REGELN) == len(_R), "doppelte Regel-ID"
@@ -1043,7 +1068,7 @@ def mauer_auf_boxenlinie(vertices, dreiecke, oberflaeche, namen, pit_xz, breite)
 
 # =============================================================================== Stufe a: ohne Bau
 def vorab_pruefen(definition, basisordner=".", versatz=None, generator=None, mit_generator=False,
-                  bauoptionen=None, umgebung=None, umgebung_katalog=None) -> dict:
+                  bauoptionen=None, umgebung=None, umgebung_katalog=None, modelle_projekt=None) -> dict:
     """Schnelle Prüfung ohne Bau.
 
     ``definition``: Pfad, dict (Rohdefinition wie im Editor) oder ``Streckendefinition``.
@@ -1053,7 +1078,8 @@ def vorab_pruefen(definition, basisordner=".", versatz=None, generator=None, mit
     ``umgebung``: Pfad oder dict einer ``umgebung.json`` (Regeln UMG_*, ``strecke/umgebung.py``); ``UMG_AUF_FAHRBAHN``
     genau mit Generatorausgabe, sonst Näherung über die Mittellinie. ``umgebung_katalog``: Ergebnis von
     ``umgebung.katalog()`` (ohne Angabe der zwischengespeicherte Katalog; ohne Spielordner bleibt UMG_MODELL_UNBEKANNT
-    ungeprüft)."""
+    ungeprüft). ``modelle_projekt``: Projektordner für die Regeln MOD_* der eigenen 3D-Modelle (ohne Angabe der
+    Ordner einer als Pfad übergebenen ``umgebung.json``)."""
     from . import definition as dfn, mittellinie, platzierung
     m: List[dict] = []
     gp = {"DEF_UNGUELTIG", "DEF_WARNUNG"}
@@ -1123,10 +1149,75 @@ def vorab_pruefen(definition, basisordner=".", versatz=None, generator=None, mit
         gp |= _generator_pruefen(erg, d, v, m)
     if umgebung is not None:
         from . import umgebung as umg
-        mu, gu = umg.pruefen_mit_geprueft(umgebung, erg if erg is not None else d, v, umgebung_katalog)
+        mu, gu = umg.pruefen_mit_geprueft(umgebung, erg if erg is not None else d, v, umgebung_katalog,
+                                          projekt=modelle_projekt)
         m += mu
         gp |= gu
+    if modelle_projekt is None and isinstance(umgebung, (str, os.PathLike)):
+        modelle_projekt = os.path.dirname(os.path.abspath(umgebung))
+    if modelle_projekt is not None:
+        gp |= modelle_pruefen(modelle_projekt, m, umgebung)
     return bericht(m, gp, stufen)
+
+
+#: Schwellen der Regeln MOD_* (M3); Fehlergrenze der Dreiecke steht in ego/modell_import.py (DREIECKE_FEHLER)
+MOD_SPEICHER_MB = 256.0
+
+
+def _modell_ort(name):
+    return ort(None, None, None, "usr_" + name)
+
+
+def modelle_pruefen(projekt, m, umgebung=None) -> set:
+    """Regeln MOD_* für die eigenen Modelle eines Projekts (``<projekt>/modelle/modelle.json``,
+    ``strecke/eigene_modelle.py``). Ohne Tabelle geprüft und ohne Meldung. ``umgebung``: Pfad oder dict der
+    ``umgebung.json`` für MOD_UNBENUTZT (ohne Angabe ``<projekt>/umgebung.json``, falls vorhanden)."""
+    from . import eigene_modelle as em
+    gp = {"MOD_DATEI", "MOD_DREIECKE", "MOD_GROESSE", "MOD_URSPRUNG", "MOD_HINWEIS", "MOD_SPEICHER", "MOD_UNBENUTZT"}
+    if not os.path.exists(em.tabelle_pfad(projekt)):
+        return gp
+    try:
+        daten = em.aktualisieren(projekt)
+    except (em.ModellFehler, OSError) as e:
+        m.append(meldung("MOD_DATEI", str(e)))
+        return gp
+    speicher = 0
+    for e in daten["modelle"]:
+        s = e.get("statistik") or {}
+        name, o = e["name"], _modell_ort(e["name"])
+        for text in s.get("fehler") or []:
+            m.append(meldung("MOD_DATEI", "Model usr_%s: %s" % (name, text), o))
+        if s.get("fehler"):
+            continue
+        n0 = int(s["dreiecke"][0])
+        if n0 > 50000:
+            m.append(meldung("MOD_DREIECKE", "Model usr_%s has %d triangles in LOD 0 (99 %% of the game's models have "
+                                             "fewer than 42,000)" % (name, n0), o, ist=n0, soll="<= 50000"))
+        for text in s.get("warnungen") or []:
+            regel = "MOD_GROESSE" if "check the unit" in text else "MOD_URSPRUNG" if text.startswith("Origin") else "MOD_HINWEIS"
+            m.append(meldung(regel, "Model usr_%s: %s" % (name, text), o))
+        for text in s.get("hinweise") or []:
+            if "triangles in LOD 0" not in text:
+                m.append(meldung("MOD_HINWEIS", "Model usr_%s: %s" % (name, text), o))
+        speicher += int(s.get("textur_bytes", 0)) + int(s.get("geometrie_bytes", 0))
+    if speicher > MOD_SPEICHER_MB * 1e6:
+        m.append(meldung("MOD_SPEICHER", "Own models need %.0f MB (textures and geometry stay in memory)"
+                         % (speicher / 1e6), ist=_r(speicher / 1e6, 1), soll="<= %.0f MB" % MOD_SPEICHER_MB))
+    roh = umgebung
+    if roh is None and os.path.exists(os.path.join(projekt, "umgebung.json")):
+        roh = os.path.join(projekt, "umgebung.json")
+    if isinstance(roh, (str, os.PathLike)):
+        try:
+            with open(roh, encoding="utf-8-sig") as f:
+                roh = json.load(f)
+        except (OSError, ValueError):
+            roh = None
+    if isinstance(roh, dict):
+        benutzt = {str(o.get("modell", "")).rsplit("/", 1)[-1] for o in roh.get("objekte", []) if isinstance(o, dict)}
+        for e in daten["modelle"]:
+            if "usr_" + e["name"] not in benutzt and not (e.get("statistik") or {}).get("fehler"):
+                m.append(meldung("MOD_UNBENUTZT", "Model usr_%s is not placed anywhere" % e["name"], _modell_ort(e["name"])))
+    return gp
 
 
 def geometrie_kennwerte(pos_xz, sigma_m=6.0, ds=1.0):

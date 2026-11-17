@@ -598,18 +598,31 @@ def cmd_bauen(args):
         else:
             _log("Geometrie einsetzen (AP11a) …")
             huegel = list(getattr(args, "gelaende_huegel", None) or [])
+            kollision, kollision_hinweise = None, []
             if args.umgebung:       # 29.10.2026: Hügel/Senken aus umgebung.json (gelaende.huegel)
                 from strecke import umgebung as umg
                 try:
-                    huegel += umg.huegel_welt(umg.laden(args.umgebung), platzierung.VERSATZ)
+                    umg_vorab = umg.laden(args.umgebung)
+                    huegel += umg.huegel_welt(umg_vorab, platzierung.VERSATZ)
                 except umg.UmgebungFehler as e:
                     raise BauFehler("Umgebung: %s" % e)
+                # M5b: Kollisionsquader eigener Modelle in die Fahrphysik (docs/eigene_modelle_m5b.md)
+                from strecke import kollision as kol
+                kollision, kollision_hinweise = kol.objekte(
+                    umg_vorab, getattr(args, "modelle_projekt", None) or os.path.dirname(args.umgebung))
+                for h in kollision_hinweise:
+                    _log("Hinweis Kollision: %s" % h)
+            extra = {"kollision": kollision, "kollision_hinweise": kollision_hinweise} if kollision else {}
             geo = mod.geometrie_einsetzen(a, npz, mauer_physik=args.mauer_physik, trn_flags=args.trn_flags,
                                           hoehe_versatz=args.geometrie_dy, physik_umfang=args.physik_umfang,
                                           physik_kante_max=args.physik_kante_max,
                                           grundflaeche=getattr(args, "grundflaeche", "raster"),
-                                          huegel=huegel or None, welt_uv=getattr(args, "welt_uv", "konstant"))
+                                          huegel=huegel or None, welt_uv=getattr(args, "welt_uv", "konstant"), **extra)
             bericht["schritte"]["geometrie"] = _kurz(geo)
+            kb = geo.get("physik", {}).get("kollision")
+            if kb:
+                _log("Kollision: %d Quader (%d SCON-Dreiecke) für eigene Modelle in der Fahrphysik%s" % (
+                    kb["anzahl"], kb["dreiecke"], ", ohne Boden: %s" % ", ".join(kb["ohne_boden"]) if kb["ohne_boden"] else ""))
     # --- Minimap (AP11c)
     _phase("minimap")
     minimap_json = None
@@ -644,7 +657,8 @@ def cmd_bauen(args):
                 _log("Hinweis: Katalog nicht verfügbar (%s)" % e)
             _log("Umgebung: %d Objekte aus %s …" % (len(umg_daten["objekte"]), args.umgebung))
             umg_bericht = umg.einsetzen(a, umg_daten, code=zustand.code, versatz=platzierung.VERSATZ,
-                                        katalog_daten=umg_katalog, protokoll=_log)
+                                        katalog_daten=umg_katalog, protokoll=_log,
+                                        projekt=getattr(args, "modelle_projekt", None) or os.path.dirname(args.umgebung))
             berge = umg.berge_einsetzen(a, umg_daten, versatz=platzierung.VERSATZ, protokoll=_log)
         except umg.UmgebungFehler as e:
             raise BauFehler("Umgebung: %s" % e)
@@ -658,6 +672,16 @@ def cmd_bauen(args):
         _log("Umgebung: %d gesetzt (%s), %d Ressourcen und %d Mip-Dateien (%.1f MB) kopiert, %d übersprungen" % (
             b["gesetzt"], ", ".join("%s %d" % kv for kv in b["je_layer"].items()), b.get("ressourcen_neu_summe", 0),
             b["mipmaps"], b["mipmaps_mb"], len(b["uebersprungen"])))
+        em_b = b.get("eigene_modelle")
+        if em_b:   # M2: eigene Modelle aus <projekt>/modelle (docs/eigene_modelle_m2.md)
+            _log("Umgebung: %d eigene(s) Modell(e) mit %d Instanzen erzeugt: %d Ressourcen, %.1f MB (Texturen %.1f MB), "
+                 "%d aus dem Zwischenspeicher, %d Hinweis(e)" % (
+                     em_b["anzahl"], sum(x["instanzen"] for x in em_b["modelle"].values()), em_b["ressourcen"],
+                     em_b["bytes"] / 1e6, em_b["textur_bytes"] / 1e6, em_b["aus_zwischenspeicher"],
+                     sum(len(x["hinweise"]) for x in em_b["modelle"].values())))
+            for name, x in em_b["modelle"].items():
+                for h in x["hinweise"]:
+                    _log("  Hinweis %s: %s" % (name, h))
     # --- Welt
     _phase("welt")
     if logik.get("bremsmarker"):
@@ -1145,7 +1169,10 @@ BAUPROFILE = {
         "beschreibung": "Empfohlener Bau (16.10.2026, v20 im Spiel fahrbar): PVS entlang der Strecke, "
                         "Boxengassen-Korrektur (AP21), Code sochi, nur Hauptvariante",
         "optionen": {"pvs_variante": "strecke", "boxen_korrektur": True, "streckencode": "sochi",
-                     "aktivierung_vorlage": "portimao", "nur_hauptvariante": True, "weltkarten": True, "renndaten": True},
+                     "aktivierung_vorlage": "portimao", "nur_hauptvariante": True, "weltkarten": True, "renndaten": True,
+                     # Bremszonen der Fahrhilfe und KI-Tempo aus der eigenen Strecke (VPTimes); ohne bleiben die des
+                     # Trägers ohne Bezug zu den Kurven (15.11.2026: CLI-Bauten zeigten vor Kurven keinen Bremspunkt)
+                     "ki_daten": "profil"},
         "streckenname": "aus der Definition (Feld name), sonst Teststrecke",
         "beleg": "CLAUDE.md „Empfohlener Bau“, docs/schritt2_ergebnisse.md (v20_pvs_strecke ✔)",
     },
@@ -1195,6 +1222,36 @@ def schnappschuss(definition, ziel_ordner):
                   "sha256": h.hexdigest(), "name": daten.get("name")}
 
 
+def _modelle_schnappschuss(projekt, umgebung_pfad, ziel_ordner):
+    """Eigene Modelle, die die Umgebungsdatei benutzt, nach ``<ziel_ordner>/modelle`` kopieren (Tabelle und Dateien,
+    M2). None, wenn die Umgebung keine eigenen Modelle nennt oder das Projekt keine Ablage hat (dann meldet der Bau
+    bzw. die Prüfregel UM-02 das fehlende Modell)."""
+    from strecke import eigene_modelle as em, umgebung as umg
+    try:
+        namen = sorted({umg.eigener_name(o["modell"]) for o in umg.laden(umgebung_pfad)["objekte"]} - {None})
+        if not namen or not projekt or not os.path.exists(em.tabelle_pfad(projekt)):
+            return None
+        daten = em.laden(projekt)
+    except (umg.UmgebungFehler, em.ModellFehler, OSError, ValueError):
+        return None
+    alt = os.path.join(ziel_ordner, "modelle")
+    if os.path.isdir(alt):
+        shutil.rmtree(alt)
+    os.makedirs(alt)
+    benutzt = [e for e in daten["modelle"] if e["name"] in namen]
+    h, kopiert = hashlib.sha256(), []
+    for e in benutzt:
+        for q in em.dateien(projekt, e):
+            if os.path.isfile(q):
+                shutil.copyfile(q, os.path.join(alt, os.path.basename(q)))
+                with open(q, "rb") as f:
+                    h.update(f.read())
+                kopiert.append(os.path.basename(q))
+    em.speichern(ziel_ordner, {**daten, "modelle": benutzt})
+    return {"quelle": em.ordner(projekt), "schnappschuss": os.path.abspath(alt), "modelle": [e["name"] for e in benutzt],
+            "dateien": kopiert, "sha256": h.hexdigest()}
+
+
 def _vorbereiten(args):
     """Optionen nach dem Parsen auflösen (Projekt, Profil, Standardpfade im JSON-Modus)."""
     if not hasattr(args, "definition"):
@@ -1211,10 +1268,14 @@ def _vorbereiten(args):
                 raise BauFehler(str(e))
     if getattr(args, "ohne_umgebung", False):
         args.umgebung = None
+    args.modelle_projekt = None
     if getattr(args, "umgebung", None):
         args.umgebung = os.path.abspath(args.umgebung)
         if not os.path.exists(args.umgebung):
             raise BauFehler("Umgebungsdatei fehlt: %s" % args.umgebung)
+        from strecke import umgebung as umg   # M2: eigene Modelle liegen in <projekt>/modelle
+        args.modelle_projekt = (umg.projektordner(args.projekt) if getattr(args, "projekt", None)
+                                else os.path.dirname(args.umgebung))
     if args.definition is None:
         args.definition = os.path.join(HIER, "strecke", "beispiele", "teststrecke.json")
     if getattr(args, "befehl", None) != "bauen":
@@ -1255,6 +1316,10 @@ def _vorbereiten(args):
             args.eingabe_info["umgebung"] = {"quelle": args.umgebung, "schnappschuss": os.path.abspath(ziel),
                                              "sha256": hashlib.sha256(roh).hexdigest()}
             args.umgebung = os.path.abspath(ziel)
+            modelle = _modelle_schnappschuss(args.modelle_projekt, args.umgebung, os.path.join(args.ausgabe, "eingabe"))
+            if modelle is not None:   # M2: benutzte eigene Modelle ebenfalls einfrieren
+                args.eingabe_info["modelle"] = modelle
+                args.modelle_projekt = os.path.join(args.ausgabe, "eingabe")
     if args.raster:   # Plätze im Generator: Startaufstellung und Boxen der Eingabekopie (docs/swofty_launcher.md)
         with open(args.definition, encoding="utf-8-sig") as f:
             daten = json.load(f)

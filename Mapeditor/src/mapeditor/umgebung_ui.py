@@ -14,8 +14,12 @@ from PySide6.QtWidgets import (
 )
 
 from . import umgebung
-from .i18n import tr
+from .i18n import meldung, tr
 from .ux import zahl
+
+
+#: Filterwert „Own models“ im Katalog (Einträge mit ``quelle == "projekt"``)
+EIGENE = "__projekt__"
 
 
 def _kreis(farbe, groesse=12):
@@ -46,6 +50,9 @@ class EnvironmentPanel(QScrollArea):
     model_chosen = Signal(object)            # Modell-Kennung zum Platzieren oder None
     preview_requested = Signal(str)          # Silhouette dieses Modells anfordern
     refresh_requested = Signal()             # Katalog neu einlesen
+    import_requested = Signal()              # eigenes 3D-Modell (.glb/.gltf/.obj) ins Projekt übernehmen (M4)
+    remove_model_requested = Signal(str)     # eigenes Modell (Name ohne usr_) aus dem Projekt entfernen
+    collision_changed = Signal(str, bool)    # M5b: Kollisionsquader eines eigenen Modells an/aus (Name ohne usr_)
     settings_changed = Signal()              # Form/Radius des Bepflanzens geändert
     properties_requested = Signal(dict)      # Felder für die gewählten Objekte {feld: wert}
     ground_cover_toggled = Signal(bool)
@@ -99,6 +106,7 @@ class EnvironmentPanel(QScrollArea):
         self.search.textChanged.connect(self.fill_list)
         self.category = QComboBox()
         self.category.addItem(tr("All categories"), None)
+        self.category.addItem(tr("Own models"), EIGENE)
         for key in umgebung.KATEGORIEN:
             self.category.addItem(tr(umgebung.KATEGORIE_NAMEN[key]), key)
         self.category.currentIndexChanged.connect(self.fill_list)
@@ -106,8 +114,13 @@ class EnvironmentPanel(QScrollArea):
         self.reload_button.setToolTip(tr(("Rebuild the catalogue from the game folder (takes a while; the game folder "
                                           "is only read).")))
         self.reload_button.clicked.connect(self.refresh_requested)
+        self.import_button = QPushButton(tr("Import model …"))
+        self.import_button.setToolTip(tr("Add your own 3D model (glTF .glb from Blender, also .gltf or .obj) to this "
+                                         "project. It appears under Own models and is placed like any other model."))
+        self.import_button.clicked.connect(self.import_requested)
         row.addWidget(self.search, 1)
         row.addWidget(self.category)
+        row.addWidget(self.import_button)
         row.addWidget(self.reload_button)
         layout.addLayout(row)
         self.list = QListWidget()
@@ -135,8 +148,30 @@ class EnvironmentPanel(QScrollArea):
         self.details.setWordWrap(True)
         self.details.setTextInteractionFlags(Qt.TextSelectableByMouse)
         layout.addWidget(self.details)
+        self.remove_model_button = QPushButton(tr("Remove own model"))
+        self.remove_model_button.setToolTip(tr("Delete this own model and its files from the project folder. Placed "
+                                               "objects of the model stay and are reported as unknown."))
+        self.remove_model_button.clicked.connect(self._remove_clicked)
+        self.remove_model_button.hide()
+        self.collision_box = QCheckBox(tr("Collision"))
+        self.collision_box.setToolTip(tr("Cars hit a box around this model (its footprint, as wall surfaces in the "
+                                         "driving physics). Applies to all objects of the model."))
+        self.collision_box.toggled.connect(self._collision_toggled)
+        self.collision_box.hide()
+        layout.addWidget(self.collision_box)
+        layout.addWidget(self.remove_model_button)
         layout.addStretch(1)
         return box
+
+    def _collision_toggled(self, an):
+        eintrag = self.index.get(self.armed_model() or "")
+        if eintrag and eintrag.get("quelle") == "projekt":
+            self.collision_changed.emit(str(eintrag.get("name", ""))[len("usr_"):], bool(an))
+
+    def _remove_clicked(self):
+        eintrag = self.index.get(self.armed_model() or "")
+        if eintrag and eintrag.get("quelle") == "projekt":
+            self.remove_model_requested.emit(str(eintrag.get("name", ""))[len("usr_"):])
 
     def _scatter_box(self):
         box = QGroupBox(tr("Plant area (tool B)"))
@@ -389,7 +424,10 @@ class EnvironmentPanel(QScrollArea):
         self.list.clear()
         shown = 0
         for m in self.models:
-            if key and m.get("kategorie") != key:
+            if key == EIGENE:
+                if m.get("quelle") != "projekt":
+                    continue
+            elif key and m.get("kategorie") != key:
                 continue
             if needle and needle not in f"{m.get('name', '')} {m.get('familie', '')} {m.get('modell', '')}".casefold():
                 continue
@@ -440,8 +478,8 @@ class EnvironmentPanel(QScrollArea):
         for row in range(self.list.count()):
             item = self.list.item(row)
             if item.data(Qt.UserRole) in wanted:
+                self.list.setCurrentItem(item)      # zuerst: die Meldung der Auswahl liest das aktuelle Element
                 item.setSelected(True)
-                self.list.setCurrentItem(item)
 
     def _list_changed(self):
         modell = self.armed_model()
@@ -455,6 +493,11 @@ class EnvironmentPanel(QScrollArea):
 
     def _show_details(self, modell):
         eintrag = self.index.get(modell) if modell else None
+        self.remove_model_button.setVisible(bool(eintrag) and eintrag.get("quelle") == "projekt")
+        self.collision_box.setVisible(bool(eintrag) and eintrag.get("quelle") == "projekt" and "kollision" in eintrag)
+        self.collision_box.blockSignals(True)
+        self.collision_box.setChecked(bool(eintrag) and eintrag.get("kollision") == "quader")
+        self.collision_box.blockSignals(False)
         if not eintrag:
             self.details.setText(tr("No model chosen.") if not modell else
                                  tr("{modell}\nNot in the catalogue.", modell=umgebung.kurzname(modell)))
@@ -466,10 +509,16 @@ class EnvironmentPanel(QScrollArea):
                  tr(umgebung.KATEGORIE_NAMEN.get(eintrag.get("kategorie"), "Sonstiges")) + (f" · {eintrag['familie']}" if eintrag.get("familie") else ""),
                  tr("Size {x} × {z} × {y} m (width × depth × height)", x=zahl(size[0], 1), z=zahl(size[2], 1), y=zahl(size[1], 1)),
                  tr("Radius on the map {radius} m", radius=zahl(eintrag.get("radius_m") or 0, 1))]
-        if eintrag.get("quelle"):
-            lines.append(tr("Source: {quelle}", quelle=eintrag["quelle"]))
-        lines.append(tr("already in the carrier package") if eintrag.get("im_traeger") else tr(("copied from the game during "
-                                                                                      "the build")))
+        if eintrag.get("quelle") == "projekt":
+            lines.append(tr("Own model from this project ({datei})", datei=eintrag.get("datei", "")))
+            if eintrag.get("dreiecke") is not None:
+                lines.append(tr("{anzahl} triangles", anzahl=zahl(eintrag["dreiecke"], 0)))
+            lines += ["⚠ " + meldung(h) for h in (eintrag.get("hinweise") or [])[:4]]
+        else:
+            if eintrag.get("quelle"):
+                lines.append(tr("Source: {quelle}", quelle=eintrag["quelle"]))
+            lines.append(tr("already in the carrier package") if eintrag.get("im_traeger") else tr(("copied from the game during "
+                                                                                          "the build")))
         self.details.setText("<br>".join(lines))
         self.preview.setPixmap(QPixmap())
         self.preview.setText(tr("Creating preview …"))

@@ -74,6 +74,9 @@ _DATEI_SCHLUESSEL = ("schema", "bodenbewuchs", "gelaende", "vorderseiten", "obje
 #: (z. B. ``jumbotron_back_b`` ab 2,1 m) mit der Unterkante; ``ursprung`` = Modellursprung auf den Boden am Mittelpunkt
 #: (Verhalten bis 14.11.2026); ``unterkante`` = Unterkante der Modell-AABB immer auf den tiefsten Bodenpunkt.
 BODEN_MODI = ("auto", "ursprung", "unterkante")
+#: Kollision je Objekt (optionales Feld ``kollision``, M5b): überschreibt den Wert des eigenen Modells
+#: (``modelle.json`` → ``kollision``); fehlt das Feld, gilt der Wert des Modells (docs/eigene_modelle_m5b.md)
+KOLLISION_ARTEN = ("keine", "quader")
 #: ``auto`` senkt ab, wenn die Geometrie mehr als so viele Meter über dem Ursprung beginnt
 BODEN_ANHEBEN_M = 0.05
 #: Boden unter dem Grundriss schwankt um mehr als so viele Meter → UMG_SCHIEF (Teil versinkt im Hang)
@@ -149,6 +152,9 @@ def normalisieren(roh) -> dict:
         o["gruppe"] = "" if g is None else str(g)
         if "boden" in o and o["boden"] not in BODEN_MODI:
             raise UmgebungFehler("Object %s: boden must be one of %s (%r)" % (oid, ", ".join(BODEN_MODI), o["boden"]))
+        if "kollision" in o and o["kollision"] not in KOLLISION_ARTEN:   # M5b, strecke/kollision.py
+            raise UmgebungFehler("Object %s: kollision must be one of %s (%r)" % (oid, ", ".join(KOLLISION_ARTEN),
+                                                                                o["kollision"]))
         neu.append(o)
     d["objekte"] = neu
     if "vorderseiten" in d:
@@ -758,8 +764,107 @@ def flaechen_aus_netz(netz):
     return fl, kanten
 
 
+# =============================================================================== Eigene Modelle des Projekts (M2)
+#: Kennung eines eigenen Modells (strecke/eigene_modelle.py); der Streckencode darin ist beliebig (der Editor schreibt
+#: den Träger-Code, ein umbenanntes Projekt evtl. einen anderen), es zählt der Name hinter ``usr_``.
+_EIGEN_MUSTER = re.compile(r"eaid://environment_package/tracks/[^/]+/objects/idf/usr_([a-z][a-z0-9_]*)")
+
+
+def eigener_name(modell: str) -> Optional[str]:
+    """Name eines eigenen Projektmodells (ohne ``usr_``) aus der Modellkennung; None bei Spielmodellen."""
+    t = _EIGEN_MUSTER.fullmatch(str(modell or ""))
+    return t.group(1) if t else None
+
+
+def projektordner(pfad) -> Optional[str]:
+    """Projektordner zu einem Pfad (Ordner selbst, sonst der Ordner der Datei); None ohne Pfad."""
+    if not isinstance(pfad, (str, os.PathLike)):
+        return None
+    pfad = os.path.abspath(pfad)
+    return pfad if os.path.isdir(pfad) else os.path.dirname(pfad)
+
+
+def projektmodelle(projekt, code="portimao") -> Tuple[Dict[str, dict], Dict[str, str]]:
+    """Eigene Modelle eines Projekts: ({Name: Katalogeintrag}, {Name: Grund}) = brauchbare Modelle und fehlerhafte.
+    Ohne Projektordner oder ohne ``modelle/modelle.json`` beides leer. Die Tabelle wird nicht verändert."""
+    from . import eigene_modelle as em
+    basis = projektordner(projekt)
+    if not basis or not os.path.exists(em.tabelle_pfad(basis)):
+        return {}, {}
+    try:
+        daten = em.laden(basis)
+        gut = {k["name"][len(em.PRAEFIX):]: k for k in em.katalogeintraege(basis, code, auffrischen=False)}
+    except (em.ModellFehler, OSError, ValueError) as e:
+        raise UmgebungFehler("Model table of the project is unreadable: %s" % e)
+    schlecht = {}
+    for e in daten["modelle"]:
+        fehlt = [p for p in em.dateien(basis, e) if not os.path.isfile(p)]
+        if fehlt:
+            gut.pop(e["name"], None)
+            schlecht[e["name"]] = "file %s is missing" % os.path.basename(fehlt[0])
+        elif e["name"] not in gut:
+            fehler = (e.get("statistik") or {}).get("fehler") or ["not examined yet"]
+            schlecht[e["name"]] = str(fehler[0])
+    return gut, schlecht
+
+
+def eigene_einsetzen(archiv, namen, projekt, code="portimao", cache="standard", protokoll=None) -> Tuple[dict, dict, dict]:
+    """Ressourcen der eigenen Modelle ``namen`` erzeugen (``eigene_modelle.umsetzen``, mit Zwischenspeicher) und ins
+    Archiv eintragen. Fehlende oder fehlerhafte Modelle sind ein Fehler (wie Spielmodelle, die es nirgends gibt).
+    Rückgabe: ({Name: Katalogeintrag}, {Name: Modellkennung im Archiv}, Bericht)."""
+    from ego import modell_import
+    from . import eigene_modelle as em
+    log = protokoll or (lambda *_: None)
+    namen = list(namen)
+    basis = projektordner(projekt)
+    if not basis:
+        raise UmgebungFehler("Own models need the project folder: %s" % ", ".join(em.PRAEFIX + n for n in namen[:5]))
+    try:   # Statistik geänderter Modelldateien auffrischen (Grundriss und Unterkante für die Bodenlage)
+        if os.path.exists(em.tabelle_pfad(basis)):
+            em.aktualisieren(basis)
+    except (em.ModellFehler, OSError, ValueError) as e:
+        raise UmgebungFehler("Model table of the project is unreadable: %s" % e)
+    gut, schlecht = projektmodelle(basis, code)
+    fehlt = ["%s%s (%s)" % (em.PRAEFIX, n, schlecht.get(n, "not in modelle/modelle.json")) for n in namen if n not in gut]
+    if fehlt:
+        raise UmgebungFehler("Own models missing or faulty in the project: %s" % "; ".join(fehlt[:5]))
+    bericht = {"anzahl": len(namen), "ressourcen": 0, "bytes": 0, "textur_bytes": 0, "aus_zwischenspeicher": 0,
+               "vorlage_material": None, "projekt": basis, "modelle": {}}
+    kennungen = {}
+    if not namen:
+        return gut, kennungen, bericht
+    try:
+        tabelle = em.laden(basis)
+        vorlage_kennung, vorlage = em.vorlage_material(archiv)
+        bericht["vorlage_material"] = vorlage_kennung
+        for n in namen:
+            um = em.umsetzen(basis, em.eintrag(tabelle, n), vorlage, code=code, cache=cache)
+            vorhanden = [r for r in um.ressourcen if archiv.find(r.kennung) is not None]
+            if vorhanden:
+                raise UmgebungFehler("Own model %s%s: identifier already exists in the carrier: %s" % (
+                    em.PRAEFIX, n, vorhanden[0].kennung))
+            modell_import.in_archiv(archiv, um.ressourcen)
+            kennungen[n] = um.modell
+            b = um.bericht
+            treffer = bool(b.get("aus_zwischenspeicher"))
+            bericht["modelle"][em.PRAEFIX + n] = {
+                "modell": um.modell, "ressourcen": len(um.ressourcen), "bytes": int(b.get("bytes", 0)),
+                "textur_bytes": int(b.get("textur_bytes", 0)), "aus_zwischenspeicher": treffer,
+                "kategorie": gut[n]["kategorie"], "instanzen": 0,
+                "hinweise": list(um.hinweise) + [h for h in gut[n].get("hinweise", []) if h not in um.hinweise]}
+            bericht["ressourcen"] += len(um.ressourcen)
+            bericht["bytes"] += int(b.get("bytes", 0))
+            bericht["textur_bytes"] += int(b.get("textur_bytes", 0))
+            bericht["aus_zwischenspeicher"] += int(treffer)
+            log("Umgebung: eigenes Modell %s%s: %d Ressourcen, %.0f kB%s" % (
+                em.PRAEFIX, n, len(um.ressourcen), b.get("bytes", 0) / 1e3, " (Zwischenspeicher)" if treffer else ""))
+    except (em.ModellFehler, modell_import.ModellImportFehler) as e:
+        raise UmgebungFehler("Own model could not be converted: %s" % e)
+    return gut, kennungen, bericht
+
+
 # =============================================================================== Prüfen
-def pruefen_mit_geprueft(daten, definition_oder_generatorausgabe=None, versatz=None, katalog_daten=None):
+def pruefen_mit_geprueft(daten, definition_oder_generatorausgabe=None, versatz=None, katalog_daten=None, projekt=None):
     """Wie ``pruefen``, zusätzlich die Menge der geprüften Regel-IDs (für ``pruefregeln.bericht``)."""
     from .pruefregeln import meldung, ort
     from . import platzierung
@@ -769,6 +874,8 @@ def pruefen_mit_geprueft(daten, definition_oder_generatorausgabe=None, versatz=N
         d = laden(daten) if isinstance(daten, (str, os.PathLike)) else normalisieren(daten)
     except UmgebungFehler as e:
         return [meldung("UMG_DATEI", str(e))], gp
+    if projekt is None and isinstance(daten, (str, os.PathLike)):
+        projekt = os.path.dirname(os.path.abspath(daten))   # eigene Modelle liegen neben der Umgebungsdatei
     v = np.asarray(platzierung.VERSATZ if versatz is None else versatz, float)
     obj = d["objekte"]
 
@@ -787,10 +894,25 @@ def pruefen_mit_geprueft(daten, definition_oder_generatorausgabe=None, versatz=N
     if kd is not None:
         gp.add("UMG_MODELL_UNBEKANNT")
         bekannt = katalog_index(kd)
+        eigene, kaputt = None, {}
         for o in obj:
-            if o["modell"] not in bekannt:
-                m.append(meldung("UMG_MODELL_UNBEKANNT", "Object %s: model %s not in the catalogue"
-                                 % (o["id"], o["modell"].rsplit("/", 1)[-1]), ort(None, None, welt(o), o["id"])))
+            if o["modell"] in bekannt:
+                continue
+            name = eigener_name(o["modell"])
+            if name is not None:   # eigenes Projektmodell (M2): bekannt, wenn es brauchbar in der Projektablage liegt
+                if eigene is None:
+                    try:
+                        eigene, kaputt = projektmodelle(projekt)
+                    except UmgebungFehler as e:
+                        eigene, kaputt = {}, {"": str(e)}
+                if name in eigene:
+                    continue
+                grund = kaputt.get(name) or kaputt.get("") or "not in modelle/modelle.json"
+                m.append(meldung("UMG_MODELL_UNBEKANNT", "Object %s: own model %s is missing or faulty in the project (%s)"
+                                 % (o["id"], o["modell"].rsplit("/", 1)[-1], grund), ort(None, None, welt(o), o["id"])))
+                continue
+            m.append(meldung("UMG_MODELL_UNBEKANNT", "Object %s: model %s not in the catalogue"
+                             % (o["id"], o["modell"].rsplit("/", 1)[-1]), ort(None, None, welt(o), o["id"])))
     x0, z0, kante = LOCH
     for o in obj:
         w = welt(o)
@@ -835,6 +957,17 @@ def pruefen_mit_geprueft(daten, definition_oder_generatorausgabe=None, versatz=N
                 m.append(meldung("UMG_AUF_FAHRBAHN", "Object %s stands %s" % (o["id"], grund),
                                  ort(None, None, welt(o), o["id"]), ist=klassen or round(ab, 2),
                                  soll="Gras/Gelände, ≥ %.0f m von Mauern" % MAUER_ABSTAND_M))
+        # M5b: Kollisionsquader eigener Modelle dürfen Fahrbahn und Boxengasse nicht berühren (UM-11)
+        from . import kollision as kol
+        gp.add("UMG_KOLLISION_FAHRBAHN")
+        paare, _ = kol.objekte(d, projekt)
+        for o, e in paare:
+            ecken = grundriss(o, e)
+            klassen = kol.fahrbahn_treffer(fl, namen, ecken) if ecken is not None else []
+            if klassen:
+                m.append(meldung("UMG_KOLLISION_FAHRBAHN", "Collision box of object %s overlaps %s (cars hit it)"
+                                 % (o["id"], "/".join(klassen)), ort(None, None, welt(o), o["id"]), ist=klassen,
+                                 soll="Gras/Kies/Gelände"))
     else:
         st = _mittellinie_aus(definition_oder_generatorausgabe)
         if st is not None:
@@ -869,14 +1002,16 @@ def bau_bewerten(bericht: dict, meldungen: list) -> set:
     return {"UMG_SCHIEF", "UMG_OHNE_BODEN"}
 
 
-def pruefen(daten, definition_oder_generatorausgabe=None, versatz=None, katalog_daten=None) -> List[dict]:
+def pruefen(daten, definition_oder_generatorausgabe=None, versatz=None, katalog_daten=None, projekt=None) -> List[dict]:
     """Prüfregeln UMG_* (``strecke/pruefregeln.py``): Meldungen mit ``ort.welt`` und ``ort.objekt`` (Objekt-ID).
 
     ``daten``: Pfad oder dict. ``definition_oder_generatorausgabe``: Generatorordner/``strecke.npz``/Ergebnis von
     ``erzeugung.berechnen`` (genaue Oberflächen und Mauern) oder Definition (Pfad, dict; Näherung über die
     Mittellinie). ``versatz``: Definition → Welt (Standard ``platzierung.VERSATZ``). ``katalog_daten``: Ergebnis von
-    ``katalog()``; ohne Angabe wird der zwischengespeicherte Katalog benutzt (ohne Spielordner: Regel nicht geprüft)."""
-    return pruefen_mit_geprueft(daten, definition_oder_generatorausgabe, versatz, katalog_daten)[0]
+    ``katalog()``; ohne Angabe wird der zwischengespeicherte Katalog benutzt (ohne Spielordner: Regel nicht geprüft).
+    ``projekt``: Projektordner mit ``modelle/`` (eigene Modelle gelten als bekannt); ohne Angabe der Ordner der
+    Umgebungsdatei, wenn ``daten`` ein Pfad ist."""
+    return pruefen_mit_geprueft(daten, definition_oder_generatorausgabe, versatz, katalog_daten, projekt)[0]
 
 
 # =============================================================================== Einsetzen (Bau)
@@ -1224,7 +1359,7 @@ def hoehenflaechen(archiv) -> Flaechen:
 
 
 def einsetzen(archiv, daten, code="portimao", versatz=None, katalog_daten=None, spielordner=None,
-              hoehen=None, protokoll=None) -> dict:
+              hoehen=None, protokoll=None, projekt=None, modell_cache="standard") -> dict:
     """Umgebungsobjekte in das (Träger-)Archiv setzen. Läuft im Bau **vor** ``spiel_welt.welt_aufraeumen``:
     Klonvorlagen sind Träger-Instanzen; das Aufräumen entfernt nur Original-Instanzen, die Klone bleiben.
 
@@ -1232,10 +1367,16 @@ def einsetzen(archiv, daten, code="portimao", versatz=None, katalog_daten=None, 
     ``<layer>$umg_<id>``, uuid5-ID, Modell ``<modell>.idf?context=render``, Bindung ``<modell>.emb?context=default``
     und Lagematrix (Drehung, Maßstab). Höhe: ``bodenlage`` auf den sichtbaren Flächen (``hoehen``, Standard:
     ``sichtflaechen`` des Archivs) plus ``hoehe_m``; ``schief`` = Objekte auf Hängen (UMG_SCHIEF). Fehlende Modelle kommen samt Abhängigkeiten aus der Quell-ERP des Katalogs.
+    Eigene Modelle (Kennung ``…/objects/idf/usr_<name>``, ``eigener_name``) werden aus ``<projekt>/modelle`` erzeugt
+    statt kopiert (``eigene_einsetzen``; ``projekt`` ohne Angabe = Ordner der Umgebungsdatei, ``modell_cache`` wie
+    ``eigene_modelle.umsetzen``); der Streckencode in der Kennung der Datei ist gleichgültig, im Archiv steht ``code``.
+    Der Bericht bekommt dann ``eigene_modelle``. Ohne eigene Modelle ändert sich nichts.
     Rückgabe: Bericht mit ``mipmaps`` = [(Name im ZIP, Spieldatei)] fürs Paket."""
     from ego import pkg
     from . import platzierung
     log = protokoll or (lambda *_: None)
+    if projekt is None and isinstance(daten, (str, os.PathLike)):
+        projekt = os.path.dirname(os.path.abspath(daten))
     d = laden(daten) if isinstance(daten, (str, os.PathLike)) else normalisieren(daten)
     v = np.asarray(platzierung.VERSATZ if versatz is None else versatz, float)
     bericht = {"objekte": len(d["objekte"]), "bodenbewuchs": d["bodenbewuchs"], "gesetzt": 0, "uebersprungen": [],
@@ -1245,7 +1386,8 @@ def einsetzen(archiv, daten, code="portimao", versatz=None, katalog_daten=None, 
         return bericht
     kd = katalog_daten
     index = {}
-    modelle = sorted({o["modell"] for o in d["objekte"]})
+    eigen = {o["modell"]: eigener_name(o["modell"]) for o in d["objekte"] if eigener_name(o["modell"])}
+    modelle = sorted({o["modell"] for o in d["objekte"]} - set(eigen))
     fehlen = [m for m in modelle if archiv.find(m + ".idf?model") is None or archiv.find(m + ".emb?context=default") is None]
     if fehlen or kd is not None:
         kd = kd or katalog(spielordner)
@@ -1286,6 +1428,15 @@ def einsetzen(archiv, daten, code="portimao", versatz=None, katalog_daten=None, 
     bericht["ressourcen_neu_summe"] = len(alle_neu)
     bericht["mipmaps"] = sorted(alle_mips.items())
     bericht["mipmaps_mb"] = round(sum(os.path.getsize(f) for f in alle_mips.values()) / 1e6, 1)
+    # --- eigene Modelle des Projekts erzeugen (M2); ihr Katalogeintrag liefert Kategorie, Grundriss und Unterkante
+    ziel_modell = {}
+    if eigen:
+        index = dict(index)
+        eintraege, kennungen, eb = eigene_einsetzen(archiv, sorted(set(eigen.values())), projekt, code, modell_cache, log)
+        for m, n in eigen.items():
+            index[m] = eintraege[n]
+            ziel_modell[m] = kennungen[n]
+        bericht["eigene_modelle"] = eb
     # --- Instanzen
     hoehen = hoehen or sichtflaechen(archiv)
     pakete = {}
@@ -1315,9 +1466,12 @@ def einsetzen(archiv, daten, code="portimao", versatz=None, katalog_daten=None, 
         name = "%s$umg_%s" % (im_traeger, o["id"])
         uid = uuid.uuid5(uuid.NAMESPACE_URL, "ego-strecke:umgebung:" + name).bytes
         inst = pkg.instanz_hinzufuegen(p, vi, [wx, y, wz], name, uid)
-        _text_setzen(p, inst.block, ("overrides", "Model", "model"), o["modell"] + ".idf?context=render")
-        _text_setzen(p, inst.block, ("overrides", "Model", "mat binding"), o["modell"] + ".emb?context=default")
+        modell = ziel_modell.get(o["modell"], o["modell"])
+        _text_setzen(p, inst.block, ("overrides", "Model", "model"), modell + ".idf?context=render")
+        _text_setzen(p, inst.block, ("overrides", "Model", "mat binding"), modell + ".emb?context=default")
         pkg.instanz_matrix_setzen(p, inst, lagematrix(wx, y, wz, o["drehung_grad"], o["skala"]))
+        if o["modell"] in eigen:
+            bericht["eigene_modelle"]["modelle"]["usr_" + eigen[o["modell"]]]["instanzen"] += 1
         bericht["gesetzt"] += 1
         bericht["je_layer"][layer] = bericht["je_layer"].get(layer, 0) + 1
         bericht["je_kategorie"][kat] = bericht["je_kategorie"].get(kat, 0) + 1

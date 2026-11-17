@@ -194,6 +194,11 @@ class ElidedLabel(QLabel):
                          self.fontMetrics().elidedText(self.full, Qt.ElideMiddle, self.width()))
 
 
+# Sichtbar im Baudialog (Hinweisbalken, Tooltip) und als Warnung im Bauprotokoll; Wortlaut im Test geprüft.
+EGO_DEPRECATED = N_("Building for the EGO GameDatabases Editor / Track Installer is deprecated and will be removed in "
+                    "a future version. Use the Swofty Launcher instead.")
+
+
 class BuildDialog(QDialog):
     def __init__(self, main):
         super().__init__(main)
@@ -334,14 +339,27 @@ class BuildDialog(QDialog):
                                      "stop costs, and the minimum lap time for leaderboards. The tyre choice is an "
                                      "estimate."))
         self.target = QComboBox()
-        self.target.addItem(tr("Track Installer (EGO Editor)"), "ego")
+        self.target.addItem(tr("Track Installer (EGO Editor) – deprecated"), "ego")
         self.target.addItem(tr("Swofty Launcher"), "swofty")
-        self.target.setCurrentIndex(max(0, self.target.findData(settings.get("ziel", "ego"))))
+        self.target.setCurrentIndex(max(0, self.target.findData(settings.get("ziel", "swofty"))))
         self.target.setToolTip(tr("Swofty Launcher: an addon with its own track code and its own name in the menus, "
                                   "for as many tracks as you like. Starts only from the launcher, offline and without "
                                   "EA AntiCheat."))
         options_grid.addWidget(QLabel(tr("Build for")), 0, 0)
         options_grid.addWidget(self.target, 0, 1)
+        self.deprecation_banner = QFrame()               # Track Installer / EGO-Editor ist veraltet: sichtbar, nicht blockierend
+        self.deprecation_banner.setObjectName("veraltet")
+        self.deprecation_banner.setStyleSheet("QFrame#veraltet {border: 1px solid #D6A94A; border-radius: 4px;}")
+        deprecation = QHBoxLayout(self.deprecation_banner)
+        deprecation_text = QLabel(tr(EGO_DEPRECATED))
+        deprecation_text.setStyleSheet("border: none;")
+        deprecation_text.setWordWrap(True)
+        deprecation.addWidget(deprecation_text, 1)
+        self.deprecation_button = QPushButton(tr("Switch to Swofty Launcher"))
+        self.deprecation_button.clicked.connect(lambda: self.target.setCurrentIndex(self.target.findData("swofty")))
+        deprecation.addWidget(self.deprecation_button)
+        self.deprecation_banner.setToolTip(tr(EGO_DEPRECATED))
+        fields_layout.addWidget(self.deprecation_banner)
         self.shared_carrier = QCheckBox(tr("Use a shared carrier (0.45 instead of 3 GB per track)"))
         self.shared_carrier.setChecked(bool(settings.get("traeger_teilen", True)))
         self.shared_carrier.setToolTip(tr("The Portimão mod's textures sit once in a carrier addon next to the "
@@ -751,6 +769,8 @@ class BuildDialog(QDialog):
 
     def _update_code_info(self, *args):
         self._place_track_name()
+        if hasattr(self, "deprecation_banner"):
+            self.deprecation_banner.setVisible(not self.swofty())
         if hasattr(self, "shared_carrier"):
             self.shared_carrier.setVisible(self.swofty())
         self._update_buttons()
@@ -977,6 +997,8 @@ class BuildDialog(QDialog):
             self.record = None
             self.messages.clear()
             self.issue_list.clear()
+            if not self.swofty():
+                self.add_message({"id": "EGO_VERALTET", "kurz": "DEP-01", "schwere": "warnung", "text": tr(EGO_DEPRECATED)})
             self._update_issue_summary()
             self.log.clear()
             self.result_text.clear()

@@ -114,6 +114,9 @@ def main():
     n = werkzeugkasten_kopieren(ZIEL / "werkzeugkasten")
     print(f"Werkzeugkasten: {n} Dateien")
     shutil.copy2(HIER / "LIESMICH.txt", ZIEL / "LIESMICH.txt")
+    (ZIEL / "docs").mkdir(exist_ok=True)      # Anleitung für eigene 3D-Modelle (englisch, deutsche Kurzfassung)
+    for f in ("own_models_blender.md", "own_models_blender.de.md"):
+        shutil.copy2(EDITOR / "docs" / f, ZIEL / "docs" / f)
     (ZIEL / "lizenzen").mkdir(exist_ok=True)
     for f in (HIER / "lizenzen").glob("*"):
         shutil.copy2(f, ZIEL / "lizenzen" / f.name)

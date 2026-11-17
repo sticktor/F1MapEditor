@@ -26,6 +26,8 @@ from . import MEHRZAHL_TRENNER, MELDUNGEN, TABELLE, lade_tabelle, platzhalter, s
 
 QUELLEN = Path(__file__).resolve().parents[1]
 WERKZEUG = QUELLEN.parents[2] / "ego-werkzeuge" / "strecke"
+#: Module unter ``ego-werkzeuge/ego`` mit Meldungen an den Nutzer (eigene 3D-Modelle, 16.11.2026)
+ZUSATZ_EGO = ("modell_import.py",)
 
 
 def _text(node):
@@ -172,7 +174,9 @@ def phasentitel(pfad):
 def meldungsvorlagen(ordner=WERKZEUG):
     """{Vorlage: Datei} aller Meldungen des Werkzeugkastens."""
     alle = {}
-    for pfad in sorted(Path(ordner).glob("*.py")):
+    dateien = sorted(Path(ordner).glob("*.py"))
+    dateien += [p for p in (Path(ordner).parent / "ego" / name for name in ZUSATZ_EGO) if p.is_file()]
+    for pfad in dateien:
         for text in vorlagen_in_datei(pfad):
             alle.setdefault(text, pfad.name)
     werkzeug = Path(ordner).parent / "neue_strecke_tool.py"

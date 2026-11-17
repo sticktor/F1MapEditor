@@ -1,19 +1,25 @@
-"""ENTWURF: eigene 3D-Modelle (Blender → glTF 2.0 / OBJ) in Spielressourcen umsetzen (15.11.2026).
+"""Eigene 3D-Modelle (Blender → glTF 2.0 / OBJ) in Spielressourcen umsetzen (M1, 16.11.2026).
 
-Eigenständiger Prototyp zur Untersuchung ``docs/eigene_modelle.md``. **Nicht im Bau und nicht im Mapeditor
-eingehängt**, verändert keine vorhandenen Module und schreibt nie in den Spielordner. Im Spiel ist nichts davon
-getestet; belegt sind Aufbau und Werte nur gegen die Originale (``analyse/modell_formate.py``,
-``tests/modell_import_test.py``).
+Hervorgegangen aus dem Entwurf vom 15.11.2026 (``docs/eigene_modelle.md``); im Spiel belegt durch die Testpakete M0
+und M0b (``docs/eigene_modelle_m0.md``, ``docs/eigene_modelle_m0b.md``): Geometrie, Kennungen, Bindung, Material und
+Textur komplett selbst erzeugt, UV und Händigkeit richtig, LOD-Wechsel, Basis-Vertex über 65.535 Vertices, neutrale
+Karten. Projektablage, Zwischenspeicher und Katalog liegen in ``strecke/eigene_modelle.py``. Schreibt nie in den
+Spielordner. Meldungen an den Nutzer (Fehler, Hinweise) sind englisch (English First), deutsche Fassung in
+``Mapeditor/src/mapeditor/i18n/meldungen.csv``.
 
-Ablauf:
+Ablauf (ein Aufruf): ``modell_umsetzen`` erzeugt Modell, Materialien und Texturen aus einer Szene:
 
-    szene = glb_lesen("schild.glb")                    # oder gltf_lesen / obj_lesen
+    szene = laden("schild.glb")                        # glb_lesen / gltf_lesen / obj_lesen
+    um = modell_umsetzen(szene, "usr_schild", "eaid://environment_package/tracks/portimao/objects", vorlage_bytes)
+    in_archiv(archiv, um.ressourcen)
+    pruefen(archiv, um.bau, quelle=spiel_index)        # Liste (Name, ok, Einzelheit)
+
+Die Bausteine einzeln:
+
     bau = modell_bauen(szene, "eaid://environment_package/tracks/portimao/objects/idf/usr_schild.idf",
                        materialien={"Tafel": "eaid://…/vorhandenes.material"})
     bau.ressourcen += textur_ressourcen("eaid://…/usr_schild_01_d.tif", rgba, FORMAT_DIFFUS)
     bau.ressourcen.append(material_aus_vorlage(vorlage_bytes, "eaid://…/usr_schild_01.material", {...}))
-    in_archiv(archiv, bau.ressourcen)
-    pruefen(archiv, bau, quelle=spiel_index)           # Liste (Name, ok, Einzelheit)
 
 Koordinaten: Das Spiel rechnet wie glTF **rechtshändig mit Y oben in Metern** (docs/formate/streckenlogik.md);
 glTF-Daten werden deshalb unverändert übernommen. Blender (Z oben) exportiert glTF mit „+Y Up“ selbst richtig:
@@ -28,9 +34,11 @@ Erzeugt wird das häufigste Layout statischer Objekte (46.749 von 67.790 Teilnet
 from __future__ import annotations
 
 import base64
+import hashlib
 import io
 import json
 import os
+import re
 import struct
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -52,6 +60,21 @@ FORMAT_DIFFUS = 70          # BC7 sRGB (Originale meist BC1 sRGB = 54; BC7 ist m
 FORMAT_DIFFUS_BC1 = 54
 FORMAT_NORMAL = 65          # BC5
 FORMAT_OBERFLAECHE = 52     # BC1 linear
+FORMAT_DIFFUS_ALPHA = 57    # BC3 sRGB: Farbkarte mit Alpha (``_da``), wie alle 730 ``object_alpha``-Materialien des Spiels
+# Oberflächenkarte ``_s`` (``me_surfaceMap``), Kanäle abgeleitet aus 267 object_opaque-Karten (M0b, 15.11.2026):
+# R fast immer 255 (vermutlich Verdeckung), G Glanz (Tafeln/Schilder 0, Monitore 174), B Metall (Tafeln 0,
+# Metallschiene 255). Neutral = matt, nicht metallisch, ohne Verdeckung, wie ``garage_board_f2_*``/``trestle_grey``.
+OBERFLAECHE_NEUTRAL = (255, 0, 0, 255)
+NORMAL_FLACH = (128, 128, 255, 255)
+NEUTRAL_KANTE = 16          # neutrale Karten 16 × 16 (Mips 16, 8, 4)
+# Normalenkarten: Spiel erwartet DirectX-Grün (+G = Bild unten, M0-Spieltest „DX gewölbt“); Blender/glTF liefern
+# OpenGL-Grün (+G = Bild oben) → beim Import Grünkanal umkehren (``normalenkarte_fuer_spiel``)
+NORMALEN_KONVENTION_SPIEL = "dx"
+# Transparenz und Maske (M5a): eigener Shader je glTF-``alphaMode``. Die Materialien dieser Shader haben dieselben
+# drei Karten wie ``object_opaque``, dazu ``me_alphaThreshold``/``me_shadowAlphaThreshold`` (``object_alpha``
+# außerdem ``me_energyConservingTransparency``); ihre Zeichnungen tragen Flag 0 statt 1.
+SHADER_ALPHA = {"BLEND": "object_alpha.nefx2", "MASK": "object_mask.nefx2"}
+VORLAGE_ART = {"BLEND": "alpha", "MASK": "mask"}
 TEXTUR_FLAGS = 264
 SRV_ART = 5
 #: Budget aus dem Bestand (analyse/modell_formate.py): LOD 0 Median 1.100, p90 10.900, p99 41.800, Maximum 254.000
@@ -87,8 +110,13 @@ class QuellMaterial:
     bild_basisfarbe: Optional[np.ndarray] = None   # RGBA uint8
     bild_normal: Optional[np.ndarray] = None
     bild_orm: Optional[np.ndarray] = None          # glTF: Verdeckung/Rauheit/Metall
-    alpha: str = "OPAQUE"
+    alpha: str = "OPAQUE"                          # glTF alphaMode: OPAQUE, BLEND, MASK
     doppelseitig: bool = False
+    alpha_schwelle: float = 0.5                    # glTF alphaCutoff (nur MASK)
+    metall: float = 0.0                            # glTF metallicFactor (Faktor zur Textur, sonst der Wert selbst)
+    rauheit: float = 1.0                           # glTF roughnessFactor
+    bild_verdeckung: Optional[np.ndarray] = None   # glTF occlusionTexture (Kanal R); oft dasselbe Bild wie bild_orm
+    verdeckung_staerke: float = 1.0                # glTF occlusionTexture.strength
 
 
 @dataclass
@@ -125,7 +153,7 @@ class _Gltf:
             uri = b.get("uri")
             if uri is None:
                 if binaer is None or i != 0:
-                    raise ModellImportFehler("glTF: Puffer %d ohne Daten" % i)
+                    raise ModellImportFehler("glTF: buffer %d has no data" % i)
                 self.puffer.append(binaer)
             else:
                 self.puffer.append(self._uri(uri))
@@ -136,7 +164,7 @@ class _Gltf:
         from urllib.parse import unquote
         pfad = os.path.normpath(os.path.join(self.ordner, unquote(uri)))
         if os.path.commonpath([os.path.abspath(pfad), os.path.abspath(self.ordner)]) != os.path.abspath(self.ordner):
-            raise ModellImportFehler("glTF: Verweis außerhalb des Ordners: %s" % uri)
+            raise ModellImportFehler("glTF: reference outside the folder: %s" % uri)
         with open(pfad, "rb") as f:
             return f.read()
 
@@ -148,7 +176,7 @@ class _Gltf:
     def zugriff(self, nr: int) -> np.ndarray:
         a = self.j["accessors"][nr]
         if "sparse" in a:
-            raise ModellImportFehler("glTF: dünn besetzte Accessoren (sparse) werden nicht unterstützt")
+            raise ModellImportFehler("glTF: sparse accessors are not supported")
         dt = np.dtype(_KOMPONENTE[a["componentType"]])
         k, n = _ANZAHL[a["type"]], a["count"]
         if "bufferView" not in a:
@@ -192,14 +220,14 @@ def _gltf_szene(g: _Gltf, quelle: str) -> Szene:
     benutzt = set(j.get("extensionsRequired", []))
     for e in _NICHT_UNTERSTUETZT:
         if e in benutzt:
-            raise ModellImportFehler("glTF: Erweiterung %s wird nicht unterstützt (ohne Kompression exportieren)" % e)
+            raise ModellImportFehler("glTF: extension %s is not supported (export without compression)" % e)
     sz = Szene(quelle=quelle)
     if j.get("asset", {}).get("version", "2.0")[:1] != "2":
-        raise ModellImportFehler("glTF: nur Version 2.0")
+        raise ModellImportFehler("glTF: only version 2.0 is supported")
     if j.get("skins"):
-        sz.hinweise.append("Skinning wird ignoriert (statische Objekte)")
+        sz.hinweise.append("Skinning is ignored (static objects only)")
     if j.get("animations"):
-        sz.hinweise.append("Animationen werden ignoriert")
+        sz.hinweise.append("Animations are ignored")
     namen = []
     for i, m in enumerate(j.get("materials", [])):
         name = m.get("name") or "material_%d" % i
@@ -207,15 +235,21 @@ def _gltf_szene(g: _Gltf, quelle: str) -> Szene:
             name += "_"
         namen.append(name)
         pbr = m.get("pbrMetallicRoughness", {})
-        for info in (pbr.get("baseColorTexture"), m.get("normalTexture")):
+        for info in (pbr.get("baseColorTexture"), m.get("normalTexture"), pbr.get("metallicRoughnessTexture"),
+                     m.get("occlusionTexture")):
             if info and info.get("texCoord", 0) != 0:
-                sz.hinweise.append("Material %s: Textur nutzt UV-Satz %d, das Spielmaterial nimmt UV0" % (name, info["texCoord"]))
+                sz.hinweise.append("Material %s: texture uses UV set %d, the game material uses UV0" % (name, info["texCoord"]))
             if info and "KHR_texture_transform" in info.get("extensions", {}):
-                sz.hinweise.append("Material %s: KHR_texture_transform wird ignoriert" % name)
+                sz.hinweise.append("Material %s: KHR_texture_transform is ignored" % name)
+        verdeckung = m.get("occlusionTexture")
         sz.materialien[name] = QuellMaterial(
             name, tuple(float(x) for x in pbr.get("baseColorFactor", (1, 1, 1, 1))), g.bild(pbr.get("baseColorTexture")),
             g.bild(m.get("normalTexture")), g.bild(pbr.get("metallicRoughnessTexture")),
-            m.get("alphaMode", "OPAQUE"), bool(m.get("doubleSided", False)))
+            m.get("alphaMode", "OPAQUE"), bool(m.get("doubleSided", False)),
+            alpha_schwelle=float(m.get("alphaCutoff", 0.5)),
+            # glTF-Standard: fehlende Faktoren sind 1 (Blender schreibt sie nur, wenn sie davon abweichen)
+            metall=float(pbr.get("metallicFactor", 1.0)), rauheit=float(pbr.get("roughnessFactor", 1.0)),
+            bild_verdeckung=g.bild(verdeckung), verdeckung_staerke=float((verdeckung or {}).get("strength", 1.0)))
     wurzeln = j.get("scenes", [{}])[j.get("scene", 0)].get("nodes") if j.get("scenes") else None
     if wurzeln is None:
         kinder = {c for k in j.get("nodes", []) for c in k.get("children", [])}
@@ -234,12 +268,12 @@ def _gltf_szene(g: _Gltf, quelle: str) -> Szene:
         nmat = np.linalg.inv(lin).T
         for pi, prim in enumerate(mesh.get("primitives", [])):
             if prim.get("mode", 4) != 4:
-                sz.hinweise.append("Primitive ohne Dreiecksliste ausgelassen (mode %s)" % prim.get("mode"))
+                sz.hinweise.append("Primitive without a triangle list left out (mode %s)" % prim.get("mode"))
                 continue
             if "extensions" in prim and any(e in prim["extensions"] for e in _NICHT_UNTERSTUETZT):
-                raise ModellImportFehler("glTF: komprimierte Geometrie wird nicht unterstützt")
+                raise ModellImportFehler("glTF: compressed geometry is not supported")
             if prim.get("targets"):
-                sz.hinweise.append("Morph-Ziele werden ignoriert")
+                sz.hinweise.append("Morph targets are ignored")
             at = prim["attributes"]
             if "POSITION" not in at:
                 continue
@@ -267,7 +301,7 @@ def _gltf_szene(g: _Gltf, quelle: str) -> Szene:
                                  nrm, tan, g.zugriff(at["TEXCOORD_0"])[:, :2] if "TEXCOORD_0" in at else None,
                                  g.zugriff(at["TEXCOORD_1"])[:, :2] if "TEXCOORD_1" in at else None, farbe))
     if not sz.teile:
-        raise ModellImportFehler("glTF: keine Dreiecke gefunden")
+        raise ModellImportFehler("glTF: no triangles found")
     return sz
 
 
@@ -276,7 +310,7 @@ def glb_lesen(pfad) -> Szene:
     with open(pfad, "rb") as f:
         d = f.read()
     if d[:4] != b"glTF" or struct.unpack_from("<I", d, 4)[0] != 2:
-        raise ModellImportFehler("Keine GLB-Datei der Version 2: %s" % pfad)
+        raise ModellImportFehler("Not a GLB file of version 2: %s" % pfad)
     o, j, binaer = 12, None, None
     while o + 8 <= len(d):
         laenge, art = struct.unpack_from("<I4s", d, o)
@@ -287,7 +321,7 @@ def glb_lesen(pfad) -> Szene:
             binaer = teil
         o += 8 + laenge
     if j is None:
-        raise ModellImportFehler("GLB ohne JSON-Teil")
+        raise ModellImportFehler("GLB without a JSON chunk")
     return _gltf_szene(_Gltf(j, binaer, os.path.dirname(os.path.abspath(pfad))), str(pfad))
 
 
@@ -325,7 +359,7 @@ def obj_lesen(pfad, z_oben: bool = False) -> Szene:
                 for i in range(1, len(ecken) - 1):
                     gruppen.setdefault(mat, []).append((ecken[0], ecken[i], ecken[i + 1]))
     if not gruppen:
-        raise ModellImportFehler("OBJ ohne Flächen: %s" % pfad)
+        raise ModellImportFehler("OBJ without faces: %s" % pfad)
     va, vta, vna = np.array(v, float).reshape(-1, 3), np.array(vt, float).reshape(-1, 2), np.array(vn, float).reshape(-1, 3)
     if z_oben:
         va = np.stack([va[:, 0], va[:, 2], -va[:, 1]], axis=1)
@@ -342,7 +376,7 @@ def obj_lesen(pfad, z_oben: bool = False) -> Szene:
         nrm = vna[[e[2] for e in schluessel]] if all(e[2] is not None for e in schluessel) and len(vna) else None
         sz.teile.append(Teil(name, name, pos, np.array(tri, np.int64), nrm, None, uv))
         sz.materialien[name] = QuellMaterial(name)
-    sz.hinweise.append("OBJ: Materialien nur dem Namen nach (MTL wird nicht gelesen)")
+    sz.hinweise.append("OBJ: materials by name only (the MTL file is not read)")
     return sz
 
 
@@ -354,12 +388,13 @@ def laden(pfad, **kw) -> Szene:
         return gltf_lesen(pfad)
     if endung == ".obj":
         return obj_lesen(pfad, **kw)
-    raise ModellImportFehler("Unbekanntes Format %s (erwartet .glb, .gltf, .obj)" % endung)
+    raise ModellImportFehler("Unknown format %s (expected .glb, .gltf or .obj)" % endung)
 
 
 # --------------------------------------------------------------------------- glTF schreiben (Tests, Maßvorlagen)
 def glb_schreiben(szene: Szene, pfad) -> None:
-    """Schreibt eine Szene als .glb (ein Mesh je Teil, Basisfarbe und optional Basisfarb-Textur als PNG).
+    """Schreibt eine Szene als .glb (ein Mesh je Teil; Basisfarbe, Metall- und Rauheitsfaktor, Bilder für
+    Basisfarbe/Normalen/ORM/Verdeckung als PNG, Alpha-Modus, Maskenschwelle und Doppelseitigkeit je Material).
     Für Tests und um ein Modell als Maßvorlage in Blender zu öffnen."""
     from PIL import Image
     binaer = bytearray()
@@ -384,13 +419,36 @@ def glb_schreiben(szene: Szene, pfad) -> None:
 
     mat_index = {}
     for name, m in szene.materialien.items():
-        eintrag = {"name": name, "pbrMetallicRoughness": {"baseColorFactor": list(m.basisfarbe), "metallicFactor": 0.0}}
-        if m.bild_basisfarbe is not None:
+        eintrag = {"name": name, "pbrMetallicRoughness": {"baseColorFactor": list(m.basisfarbe),
+                                                          "metallicFactor": float(m.metall)}}
+        if m.rauheit != 1.0:
+            eintrag["pbrMetallicRoughness"]["roughnessFactor"] = float(m.rauheit)
+        def bild_index(rgba) -> int:
             puffer = io.BytesIO()
-            Image.fromarray(m.bild_basisfarbe, "RGBA").save(puffer, "PNG")
+            Image.fromarray(np.asarray(rgba, np.uint8), "RGBA").save(puffer, "PNG")
             bilder.append({"bufferView": sicht(puffer.getvalue()), "mimeType": "image/png"})
             texturen.append({"source": len(bilder) - 1})
-            eintrag["pbrMetallicRoughness"]["baseColorTexture"] = {"index": len(texturen) - 1}
+            return len(texturen) - 1
+
+        if m.bild_basisfarbe is not None:
+            eintrag["pbrMetallicRoughness"]["baseColorTexture"] = {"index": bild_index(m.bild_basisfarbe)}
+        if m.bild_normal is not None:
+            eintrag["normalTexture"] = {"index": bild_index(m.bild_normal)}
+        if m.bild_orm is not None:
+            eintrag["pbrMetallicRoughness"]["metallicRoughnessTexture"] = {"index": bild_index(m.bild_orm)}
+        if m.bild_verdeckung is not None:
+            gleich = m.bild_orm is not None and (m.bild_verdeckung is m.bild_orm or (
+                m.bild_verdeckung.shape == m.bild_orm.shape and np.array_equal(m.bild_verdeckung, m.bild_orm)))
+            eintrag["occlusionTexture"] = {"index": eintrag["pbrMetallicRoughness"]["metallicRoughnessTexture"]["index"]
+                                           if gleich else bild_index(m.bild_verdeckung)}
+            if m.verdeckung_staerke != 1.0:
+                eintrag["occlusionTexture"]["strength"] = float(m.verdeckung_staerke)
+        if m.alpha != "OPAQUE":
+            eintrag["alphaMode"] = m.alpha
+            if m.alpha == "MASK" and m.alpha_schwelle != 0.5:
+                eintrag["alphaCutoff"] = float(m.alpha_schwelle)
+        if m.doppelseitig:
+            eintrag["doubleSided"] = True
         mat_index[name] = len(materialien)
         materialien.append(eintrag)
     for t in szene.teile:
@@ -409,7 +467,7 @@ def glb_schreiben(szene: Szene, pfad) -> None:
             prim["material"] = mat_index[t.material]
         meshes.append({"name": t.name, "primitives": [prim]})
         knoten.append({"name": t.name, "mesh": len(meshes) - 1})
-    j = {"asset": {"version": "2.0", "generator": "ego-werkzeuge modell_import_entwurf"}, "scene": 0,
+    j = {"asset": {"version": "2.0", "generator": "ego-werkzeuge modell_import"}, "scene": 0,
          "scenes": [{"nodes": list(range(len(knoten)))}], "nodes": knoten, "meshes": meshes,
          "accessors": zugriffe, "bufferViews": sichten, "buffers": [{"byteLength": len(binaer)}]}
     if materialien:
@@ -487,31 +545,31 @@ def _teil_aufbereiten(t: Teil, hinweise: List[str]) -> Teil:
     pos = np.asarray(t.positionen, np.float64).reshape(-1, 3)
     tri = np.asarray(t.dreiecke, np.int64).reshape(-1, 3)
     if not len(tri) or not len(pos):
-        raise ModellImportFehler("Teil %s ist leer" % t.name)
+        raise ModellImportFehler("Part %s is empty" % t.name)
     if tri.min() < 0 or tri.max() >= len(pos):
-        raise ModellImportFehler("Teil %s: Dreiecksindizes außerhalb der Vertexliste" % t.name)
+        raise ModellImportFehler("Part %s: triangle indices outside the vertex list" % t.name)
     if not np.isfinite(pos).all():
-        raise ModellImportFehler("Teil %s: Positionen enthalten NaN/Inf" % t.name)
+        raise ModellImportFehler("Part %s: positions contain NaN/Inf" % t.name)
     flaeche = np.linalg.norm(np.cross(pos[tri[:, 1]] - pos[tri[:, 0]], pos[tri[:, 2]] - pos[tri[:, 0]]), axis=1)
     entartet = flaeche <= 1e-12
     if entartet.any():
-        hinweise.append("Teil %s: %d entartete Dreiecke entfernt" % (t.name, int(entartet.sum())))
+        hinweise.append("Part %s: %d degenerate triangles removed" % (t.name, int(entartet.sum())))
         tri = tri[~entartet]
         if not len(tri):
-            raise ModellImportFehler("Teil %s: nur entartete Dreiecke" % t.name)
+            raise ModellImportFehler("Part %s: only degenerate triangles" % t.name)
     if t.normalen is None:
         nrm = grafik.normalen_berechnen(pos, tri)
-        hinweise.append("Teil %s: Normalen fehlen, aus den Flächen berechnet (weich)" % t.name)
+        hinweise.append("Part %s: normals missing, calculated from the faces (smooth)" % t.name)
     else:
         nrm = np.asarray(t.normalen, np.float64)
         nrm = nrm / np.maximum(np.linalg.norm(nrm, axis=1, keepdims=True), 1e-12)
     if t.uv0 is None:
         uv = np.zeros((len(pos), 2))
-        hinweise.append("Teil %s: UV fehlt, Textur erscheint einfarbig" % t.name)
+        hinweise.append("Part %s: no UV, the texture appears in one colour" % t.name)
     else:
         uv = np.asarray(t.uv0, np.float64)
         if np.abs(uv).max() > UV_HALB_WARNUNG:
-            hinweise.append("Teil %s: UV bis %.0f, mit 16-Bit-Gleitkomma ungenau (Kachelung verkleinern)" % (
+            hinweise.append("Part %s: UV up to %.0f, imprecise with 16-bit floats (reduce the tiling)" % (
                 t.name, np.abs(uv).max()))
     tan = tangenten_berechnen(pos, nrm, uv, tri) if t.tangenten is None else np.asarray(t.tangenten, np.float64)
     uv1 = np.tile(LICHT_UV_STANDARD, (len(pos), 1)) if t.uv1 is None else np.clip(np.asarray(t.uv1, np.float64), 0.0, 1.0)
@@ -523,11 +581,30 @@ def _teil_aufbereiten(t: Teil, hinweise: List[str]) -> Teil:
     return Teil(t.name, t.material, pos, tri, nrm, tan, uv, uv1)
 
 
-def _stuecke(tri: np.ndarray, vertices: int, grenze: int = INDEX_GRENZE) -> List[Tuple[np.ndarray, np.ndarray]]:
+def _raeumlich_sortiert(tri: np.ndarray, pos: np.ndarray) -> np.ndarray:
+    """Dreiecke in Z-Ordnung (Morton-Code der Schwerpunkte, 10 Bit je Achse über die AABB): benachbarte Dreiecke
+    liegen danach nah beieinander in der Liste, so dass ``_stuecke`` räumlich zusammenhängende Stücke schneidet."""
+    s = np.asarray(pos, np.float64)[tri].mean(axis=1)
+    lo, hi = s.min(0), s.max(0)
+    q = np.clip(((s - lo) / np.maximum(hi - lo, 1e-12) * 1023).astype(np.uint64), 0, 1023)
+    code = np.zeros(len(tri), np.uint64)
+    for bit in range(10):
+        for achse in range(3):
+            code |= ((q[:, achse] >> np.uint64(bit)) & np.uint64(1)) << np.uint64(3 * bit + achse)
+    return tri[np.argsort(code, kind="stable")]
+
+
+def _stuecke(tri: np.ndarray, vertices: int, grenze: int = INDEX_GRENZE, pos: Optional[np.ndarray] = None
+             ) -> List[Tuple[np.ndarray, np.ndarray]]:
     """Teilt ein Netz so, dass jedes Stück höchstens ``grenze`` + 1 Vertices nutzt (16-Bit-Indizes).
-    Rückgabe je Stück: (benutzte Vertexnummern, Dreiecke mit lokalen Indizes)."""
+    Rückgabe je Stück: (benutzte Vertexnummern, Dreiecke mit lokalen Indizes). Mit ``pos`` wird zusätzlich eine
+    räumlich sortierte Reihenfolge geteilt und die mit weniger Vertices genommen; sonst teilt die Dreiecksreihenfolge, und liegen Nachbardreiecke weit auseinander in
+    der Liste, verdoppeln sich die Vertices an jeder Schnittstelle (M0: 180.810 statt 90.513)."""
     if vertices <= grenze + 1:
         return [(np.arange(vertices), tri)]
+    if pos is not None:
+        a, b = _stuecke(tri, vertices, grenze), _stuecke(_raeumlich_sortiert(tri, pos), vertices, grenze)
+        return a if sum(len(x) for x, _ in a) <= sum(len(x) for x, _ in b) else b
     aus, karte, liste, lokal = [], {}, [], []
     for a, b, c in tri.tolist():
         neu = sum(1 for x in {a, b, c} if x not in karte)
@@ -543,6 +620,20 @@ def _stuecke(tri: np.ndarray, vertices: int, grenze: int = INDEX_GRENZE) -> List
         lokal.append(dreieck)
     aus.append((np.array(liste, np.int64), np.array(lokal, np.int64)))
     return aus
+
+
+def _doppelseitig(t: Teil) -> Teil:
+    """Rückseiten als Geometrie (M5a): jedes Dreieck noch einmal mit umgekehrtem Umlaufsinn auf eigenen Vertices mit
+    umgekehrter Normale. Die Tangente bleibt (dP/du ist dasselbe), ihr ``w`` wechselt das Vorzeichen, damit
+    ``w · cross(N, T)`` weiter gegen dP/dv zeigt. Von jeder Seite ist genau eine der beiden Flächen sichtbar (die
+    andere ist Rückseite und wird nicht gezeichnet), es flimmert also nichts. Gilt für jeden Shader und jeden Träger
+    (``object_opaque_double`` gibt es nur für deckende Flächen und nicht in jedem Träger)."""
+    n = len(t.positionen)
+    tan = np.array(t.tangenten, np.float64, copy=True)
+    tan[:, 3] *= -1.0
+    return Teil(t.name, t.material, np.concatenate([t.positionen, t.positionen]),
+                np.concatenate([t.dreiecke, t.dreiecke[:, ::-1] + n]), np.concatenate([t.normalen, -t.normalen]),
+                np.concatenate([t.tangenten, tan]), np.concatenate([t.uv0, t.uv0]), np.concatenate([t.uv1, t.uv1]))
 
 
 # --------------------------------------------------------------------------- Ressourcen
@@ -601,7 +692,8 @@ def lod_abstaende_vorschlag(lods: int, sichtweite_m: float) -> Tuple[float, ...]
 
 def modell_bauen(szenen, basis: str, materialien: Optional[Dict[str, str]] = None, *, sichtweite_m: float = 2500.0,
                  lod_abstaende: Optional[Sequence[float]] = None, opak: Optional[Dict[str, bool]] = None,
-                 mit_bindung: bool = True, streng: bool = True, slotnamen: Optional[Dict[str, str]] = None) -> Bau:
+                 mit_bindung: bool = True, streng: bool = True, slotnamen: Optional[Dict[str, str]] = None,
+                 doppelseitig: Optional[Dict[str, bool]] = None) -> Bau:
     """Erzeugt GfxModelRes, ModelProxyRes, je LOD ein GfxMeshRes, vier Vertexpuffer, einen Indexpuffer und die
     Materialbindung ``<modell>.emb?context=default``.
 
@@ -609,24 +701,27 @@ def modell_bauen(szenen, basis: str, materialien: Optional[Dict[str, str]] = Non
     ``materialien``: Quellmaterial → Kennung eines GfxMaterialRes (vorhanden oder mit ``material_aus_vorlage``
     erzeugt). ``opak``: Quellmaterial → False für Alpha-/Maskenmaterial (Zeichnungs-Flag 0 statt 1).
     ``slotnamen``: Quellmaterial → Name des Materialslots (Standard ``01``, ``02`` … wie bei den meisten
-    Originalen), z. B. um die Slots einer vorhandenen Bindung zu treffen."""
+    Originalen), z. B. um die Slots einer vorhandenen Bindung zu treffen. ``doppelseitig``: Quellmaterial → True
+    ergänzt die Rückseiten als Geometrie (doppelte Dreieckszahl, ``_doppelseitig``)."""
     if isinstance(szenen, Szene):
         szenen = [szenen]
     if not basis.startswith("eaid://") or not basis.endswith(".idf"):
-        raise ModellImportFehler("Basiskennung muss eaid://…/<name>.idf sein")
+        raise ModellImportFehler("Base identifier must be eaid://…/<name>.idf")
     name = basis.rsplit("/", 1)[-1][:-len(".idf")]
     hinweise: List[str] = []
     for s in szenen:
         hinweise += s.hinweise
     lods = [[_teil_aufbereiten(t, hinweise) for t in s.teile] for s in szenen]
+    if doppelseitig:
+        lods = [[_doppelseitig(t) if doppelseitig.get(t.material) else t for t in teile] for teile in lods]
     n0 = sum(len(t.dreiecke) for t in lods[0])
     if n0 > DREIECKE_FEHLER and streng:
-        raise ModellImportFehler("%d Dreiecke in LOD 0 (größtes Spielmodell: 254.000)" % n0)
+        raise ModellImportFehler("%d triangles in LOD 0 (largest model of the game: 254,000)" % n0)
     if n0 > DREIECKE_WARNUNG:
-        hinweise.append("%d Dreiecke in LOD 0 (99 %% der Spielmodelle haben unter 42.000)" % n0)
+        hinweise.append("%d triangles in LOD 0 (99 %% of the game's models have fewer than 42,000)" % n0)
     for i in range(1, len(lods)):
         if sum(len(t.dreiecke) for t in lods[i]) >= sum(len(t.dreiecke) for t in lods[i - 1]):
-            hinweise.append("LOD %d hat nicht weniger Dreiecke als LOD %d" % (i, i - 1))
+            hinweise.append("LOD %d does not have fewer triangles than LOD %d" % (i, i - 1))
     # Materialslots nach erstem Auftreten in LOD 0, dann in den weiteren LODs
     reihenfolge: List[str] = []
     for teile in lods:
@@ -634,14 +729,14 @@ def modell_bauen(szenen, basis: str, materialien: Optional[Dict[str, str]] = Non
             if t.material not in reihenfolge:
                 reihenfolge.append(t.material)
     if len(reihenfolge) > 99:
-        raise ModellImportFehler("Mehr als 99 Materialien")
+        raise ModellImportFehler("More than 99 materials")
     slot_von = {m: (slotnamen or {}).get(m, "%02d" % (i + 1)) for i, m in enumerate(reihenfolge)}
     if len(set(slot_von.values())) != len(slot_von):
-        raise ModellImportFehler("Materialslots sind nicht eindeutig: %s" % sorted(slot_von.values()))
+        raise ModellImportFehler("Material slots are not unique: %s" % sorted(slot_von.values()))
     materialien = materialien or {}
     fehlend = [m for m in reihenfolge if m not in materialien]
     if fehlend and mit_bindung:
-        raise ModellImportFehler("Keine Spielmaterialien für: %s" % ", ".join(fehlend))
+        raise ModellImportFehler("No game materials for: %s" % ", ".join(fehlend))
     opak = opak or {}
     # Vertexpool und Indizes
     pos_l, nrm_l, tan_l, uv_l, ind_l = [], [], [], [], []
@@ -670,7 +765,7 @@ def modell_bauen(szenen, basis: str, materialien: Optional[Dict[str, str]] = Non
             n = np.concatenate([t.normalen for t in gruppe])
             tg = np.concatenate([t.tangenten for t in gruppe])
             uv = np.concatenate([np.concatenate([t.uv0, t.uv1], axis=1) for t in gruppe])
-            for benutzt, tri in _stuecke(np.concatenate(tri_alle), len(p)):
+            for benutzt, tri in _stuecke(np.concatenate(tri_alle), len(p), pos=p):
                 pp = p[benutzt].astype(np.float32)
                 pos_l.append(pp)
                 nrm_l.append(np.concatenate([n[benutzt], np.zeros((len(benutzt), 1))], axis=1))
@@ -687,7 +782,7 @@ def modell_bauen(szenen, basis: str, materialien: Optional[Dict[str, str]] = Non
         mesh.knoten = [grafik.MeshKnoten(EINHEIT, 0, 1 + li, 0, 0, len(mesh.zeichnungen), 0, 0)]
         fehler = mesh.pruefen()
         if fehler:
-            raise ModellImportFehler("Mesh LOD %d fehlerhaft: %s" % (li, fehler))
+            raise ModellImportFehler("Mesh LOD %d is invalid: %s" % (li, fehler))
         meshes.append(mesh)
     pos = np.concatenate(pos_l)
     res: List[Ressource] = [
@@ -714,7 +809,7 @@ def modell_bauen(szenen, basis: str, materialien: Optional[Dict[str, str]] = Non
     abst = tuple(float(x) for x in (lod_abstaende if lod_abstaende is not None
                                     else lod_abstaende_vorschlag(len(lods), sichtweite_m)))
     if len(abst) != 2 * len(lods) - 1:
-        raise ModellImportFehler("LOD-Abstände: %d Werte statt %d" % (len(abst), 2 * len(lods) - 1))
+        raise ModellImportFehler("LOD distances: %d values instead of %d" % (len(abst), 2 * len(lods) - 1))
     modell = grafik.GfxModell(lod_anzahl=len(lods), knoten_anzahl=len(knoten), namen_anzahl=len(knoten),
                               mesh_kennungen=[grafik.mesh_kennung(basis, li) for li in range(len(lods))], kugel=kugel,
                               aabb_min=aabb[0], aabb_max=aabb[1], lod_abstaende=abst, lod_wert=2, knoten=knoten)
@@ -772,18 +867,27 @@ def _zweierpotenz(n: int) -> int:
     return p
 
 
+def zielgroesse(breite: int, hoehe: int, max_kante: int = 2048) -> Tuple[int, int]:
+    """Texturgröße im Spiel: beide Kanten zur nächsten Zweierpotenz, dann gemeinsam halbiert, bis die längere Kante
+    ``max_kante`` einhält (das Seitenverhältnis der Zweierpotenzen bleibt, kleinste Kante 4)."""
+    zw, zh = _zweierpotenz(breite), _zweierpotenz(hoehe)
+    while max(zw, zh) > max_kante and max(zw, zh) > 4:
+        zw, zh = max(4, zw // 2), max(4, zh // 2)
+    return zw, zh
+
+
 def bild_vorbereiten(rgba: np.ndarray, max_kante: int = 2048) -> Tuple[np.ndarray, Optional[str]]:
     """Bild auf Zweierpotenzen (4…max_kante) bringen. Rückgabe (RGBA, Hinweis oder None)."""
     from PIL import Image
     a = np.asarray(rgba, np.uint8)
     if a.ndim != 3 or a.shape[2] != 4:
-        raise ModellImportFehler("Bild muss RGBA sein")
+        raise ModellImportFehler("Image must be RGBA")
     h, w = a.shape[:2]
-    zw, zh = min(_zweierpotenz(w), max_kante), min(_zweierpotenz(h), max_kante)
+    zw, zh = zielgroesse(w, h, max_kante)
     if (zw, zh) == (w, h):
         return a, None
     neu = np.asarray(Image.fromarray(a, "RGBA").resize((zw, zh), Image.Resampling.LANCZOS), np.uint8)
-    return neu, "Bild %d×%d auf %d×%d umgerechnet (Zweierpotenzen, höchstens %d)" % (w, h, zw, zh, max_kante)
+    return neu, "Image %d×%d resized to %d×%d (powers of two, at most %d)" % (w, h, zw, zh, max_kante)
 
 
 def textur_ressourcen(kennung_tif: str, rgba: np.ndarray, format: int = FORMAT_DIFFUS) -> List[Ressource]:
@@ -791,11 +895,11 @@ def textur_ressourcen(kennung_tif: str, rgba: np.ndarray, format: int = FORMAT_D
     Mip-Kette bis 4 px) und GfxSRVResource ``<kennung>``. 3.756 Originaltexturen sind ebenso aufgebaut."""
     from . import grafik_textur_schreiben as gts
     if not kennung_tif.endswith(".tif"):
-        raise ModellImportFehler("Texturkennung muss auf .tif enden")
+        raise ModellImportFehler("Texture identifier must end in .tif")
     a = np.asarray(rgba, np.uint8)
     h, w = a.shape[:2]
     if w & (w - 1) or h & (h - 1) or min(w, h) < 4:
-        raise ModellImportFehler("Texturgröße %d×%d ist keine Zweierpotenz ≥ 4 (bild_vorbereiten)" % (w, h))
+        raise ModellImportFehler("Texture size %d×%d is not a power of two ≥ 4" % (w, h))
     stufen = gts.mip_kette(a)
     kodieren = bc5_kodieren if format == FORMAT_NORMAL else (lambda s: gts.bild_kodieren(s, format))
     daten = b"".join(kodieren(s) for s in stufen)
@@ -807,6 +911,135 @@ def textur_ressourcen(kennung_tif: str, rgba: np.ndarray, format: int = FORMAT_D
     return [bild, _res(kennung_tif, "GfxSRVResource", sicht.to_bytes())]
 
 
+def normalenkarte_fuer_spiel(rgba: np.ndarray, quelle: str = "gl") -> np.ndarray:
+    """Normalenkarte in die Spielkonvention (DirectX-Grün) bringen. ``quelle`` = ``gl`` (Blender, glTF, Substance
+    „OpenGL“: +G = Bild oben) kehrt den Grünkanal um, ``dx`` lässt das Bild unverändert."""
+    a = np.array(rgba, np.uint8, copy=True)
+    if quelle not in ("gl", "dx"):
+        raise ModellImportFehler("Unknown normal map convention %r (gl or dx)" % quelle)
+    if quelle != NORMALEN_KONVENTION_SPIEL:
+        a[..., 1] = 255 - a[..., 1]
+    return a
+
+
+def neutrale_karten(praefix: str, oberflaeche: Sequence[int] = OBERFLAECHE_NEUTRAL
+                    ) -> Tuple[List[Ressource], Dict[str, str]]:
+    """Eigene einfarbige Oberflächen- (``_s``, BC1 linear) und flache Normalenkarte (``_n``, BC5) für ein geklontes
+    Material, damit es keine Karten des Vorlagenmaterials erbt (M0: Blockstreifen der Startampel-Oberflächenkarte).
+    ``praefix`` ohne Endung, z. B. ``…/textures/usr_neutral``. Rückgabe (Ressourcen, {Slot: Kennung})."""
+    k = NEUTRAL_KANTE
+    s = np.empty((k, k, 4), np.uint8)
+    s[...] = np.asarray(oberflaeche, np.uint8)
+    n = np.empty((k, k, 4), np.uint8)
+    n[...] = np.asarray(NORMAL_FLACH, np.uint8)
+    ks, kn = praefix + "_s.tif", praefix + "_n.tif"
+    res = textur_ressourcen(ks, s, FORMAT_OBERFLAECHE) + textur_ressourcen(kn, n, FORMAT_NORMAL)
+    return res, {"me_surfaceMap": ks, "me_normalMap": kn}
+
+
+def _kanal(wert: float) -> int:
+    return int(round(255.0 * min(1.0, max(0.0, float(wert)))))
+
+
+def oberflaeche_konstant(q: QuellMaterial) -> Tuple[int, int, int, int]:
+    """Farbe der Oberflächenkarte ``_s`` für ein Material ohne ORM-Bild: R Verdeckung (255 = keine),
+    G Glanz = 1 − Rauheit, B Metall. Rauheit 1 und Metall 0 ergeben die neutrale Karte (255, 0, 0)."""
+    return (255, _kanal(1.0 - q.rauheit), _kanal(q.metall), 255)
+
+
+def oberflaechenkarte(q: QuellMaterial) -> Optional[np.ndarray]:
+    """Oberflächenkarte ``_s`` des Spiels (RGBA uint8) aus den glTF-Bildern eines Materials, None ohne Bild.
+
+    glTF: ``metallicRoughnessTexture`` G = Rauheit, B = Metall (je mal Faktor), ``occlusionTexture`` R = Verdeckung
+    (1 = keine; ``strength`` mischt gegen 1). Spiel (Namen der einfarbigen Karten des Spiels: ``blank_surface_01``
+    (255, 0, 0), ``…_satin`` (255, 174, 33), ``…_glossy_01`` (255, 255, 0), ``…_glass`` (255, 255, 255)):
+    R Verdeckung, G Glanz = 1 − Rauheit, B Metall. Die Größe gibt das ORM-Bild vor, sonst das Verdeckungsbild."""
+    if q.bild_orm is None and q.bild_verdeckung is None:
+        return None
+    from PIL import Image
+    orm = None if q.bild_orm is None else np.asarray(q.bild_orm, np.uint8)
+    ao = None if q.bild_verdeckung is None else np.asarray(q.bild_verdeckung, np.uint8)
+    h, w = (orm if orm is not None else ao).shape[:2]
+    aus = np.empty((h, w, 4), np.uint8)
+    aus[..., 3] = 255
+    if ao is None:
+        aus[..., 0] = 255
+    else:
+        if ao.shape[:2] != (h, w):
+            ao = np.asarray(Image.fromarray(ao, "RGBA").resize((w, h), Image.Resampling.LANCZOS), np.uint8)
+        k = min(1.0, max(0.0, float(q.verdeckung_staerke)))
+        aus[..., 0] = np.rint(255.0 - k * (255.0 - ao[..., 0].astype(np.float64)))
+    if orm is None:
+        aus[..., 1], aus[..., 2] = _kanal(1.0 - q.rauheit), _kanal(q.metall)
+    else:
+        rau = np.clip(orm[..., 1].astype(np.float64) * float(q.rauheit), 0.0, 255.0)
+        aus[..., 1] = np.rint(255.0 - rau)
+        aus[..., 2] = np.rint(np.clip(orm[..., 2].astype(np.float64) * float(q.metall), 0.0, 255.0))
+    return aus
+
+
+def farbkarte_mit_alpha(q: QuellMaterial) -> np.ndarray:
+    """Farbkarte ``_da`` für Transparenz und Maske: Basisfarb-Bild (sonst weiß), Alpha mal ``baseColorFactor[3]``.
+    Die Tönung des Spielmaterials hat keinen Alphawert, die Deckkraft steht deshalb immer im Bild."""
+    if q.bild_basisfarbe is None:
+        a = np.full((NEUTRAL_KANTE, NEUTRAL_KANTE, 4), 255, np.uint8)
+    else:
+        a = np.array(q.bild_basisfarbe, np.uint8, copy=True)
+    faktor = min(1.0, max(0.0, float(q.basisfarbe[3]) if len(q.basisfarbe) > 3 else 1.0))
+    if faktor != 1.0:
+        a[..., 3] = np.rint(a[..., 3].astype(np.float64) * faktor)
+    return a
+
+
+_VORLAGE_NULL = ("me_diffuseMapHeapIndex", "me_normalMapHeapIndex", "me_surfaceMapHeapIndex", "me_receiveSSRTShadows",
+                 "me_roughnessLinkedOcclusion", "me_suppressSSAO", "me_useCubemaps", "me_useSSRT", "me_glowLevel",
+                 "me_selfIlluminationLevel", "me_translucency")
+
+
+def vorlage_alpha_finden(quelle, modus: str) -> Optional[str]:
+    """Kennung eines Vorlagenmaterials für glTF ``BLEND`` (Shader ``object_alpha``) oder ``MASK``
+    (``object_mask``) in Archiv oder Index; None, wenn der Träger keines hat.
+
+    Genommen wird ein unauffälliges Material: genau die drei Karten in drei verschiedenen Texturen, weiße Tönung,
+    kein Leuchten, alle Schalter 0 (bei ``object_alpha`` ``me_energyConservingTransparency`` 1, wie 49 von 51 im
+    Träger; Ganzzahlkonstanten schreibt der Werkzeugkasten nicht um). Unter den Kandidaten das mit den wenigsten
+    Parametern, dann nach Kennung: die Wahl hängt nicht von der Reihenfolge im Archiv ab."""
+    shader = SHADER_ALPHA[modus]
+    idx = grafik._als_index(quelle)
+    kandidaten = []
+    for r in idx.alle("GfxMaterialRes"):
+        try:
+            m = grafik.Material.aus_bytes(r.data())
+        except Exception:  # noqa: BLE001
+            continue
+        tex = m.texturen()
+        if not m.shader.endswith("/" + shader) or sorted(tex) != sorted(VORLAGE_SLOTS) or len(set(tex.values())) != 3:
+            continue
+        k = m.konstanten()
+        if "me_alphaThreshold" not in k or "me_shadowAlphaThreshold" not in k:
+            continue
+        if tuple(round(x, 3) for x in k.get("me_diffuseTint", (1, 1, 1))) != (1, 1, 1):
+            continue
+        if any(k.get(n, (0,))[0] != 0 for n in _VORLAGE_NULL):
+            continue
+        if modus == "BLEND" and k.get("me_energyConservingTransparency", (1,))[0] != 1:
+            continue
+        kandidaten.append((len(m.parameter), r.identifier))
+    return min(kandidaten)[1] if kandidaten else None
+
+
+def vorlagen_alpha(quelle) -> Tuple[Dict[str, str], Dict[str, bytes]]:
+    """Vorlagen für Transparenz und Maske aus dem Träger: ({``alpha``/``mask``: Kennung}, {…: Bytes}).
+    Fehlt ein Shader im Träger, fehlt der Schlüssel; solche Materialien zeichnet die Umsetzung deckend (Hinweis)."""
+    idx = grafik._als_index(quelle)
+    kennungen, roh = {}, {}
+    for modus, art in VORLAGE_ART.items():
+        k = vorlage_alpha_finden(idx, modus)
+        if k is not None:
+            kennungen[art], roh[art] = k, idx.get(k).data()
+    return kennungen, roh
+
+
 def material_aus_vorlage(vorlage: bytes, kennung: str, texturen: Optional[Dict[str, str]] = None,
                          konstanten: Optional[Dict[str, Sequence[float]]] = None) -> Ressource:
     """Neues GfxMaterialRes als Kopie eines Spielmaterials (Shader, Parameter und Konstantenpuffer bleiben):
@@ -814,16 +1047,16 @@ def material_aus_vorlage(vorlage: bytes, kennung: str, texturen: Optional[Dict[s
     ``grafik.material_aendern`` (z. B. ``me_diffuseTint``). Nicht genannte Slots behalten die Textur der Vorlage;
     diese muss dann im Paket vorhanden sein."""
     if not kennung.endswith(".material"):
-        raise ModellImportFehler("Materialkennung muss auf .material enden")
+        raise ModellImportFehler("Material identifier must end in .material")
     m = grafik.Material.aus_bytes(vorlage)
     alt = m.texturen()
     tausch: Dict[str, str] = {}
     for slot, neu in (texturen or {}).items():
         if slot not in alt:
-            raise ModellImportFehler("Vorlagenmaterial hat keinen Texturslot %s (vorhanden: %s)" % (slot, ", ".join(sorted(alt))))
+            raise ModellImportFehler("Template material has no texture slot %s (available: %s)" % (slot, ", ".join(sorted(alt))))
         andere = [s for s, k in alt.items() if k == alt[slot] and s != slot and (texturen or {}).get(s) != neu]
         if andere:
-            raise ModellImportFehler("Vorlage nutzt dieselbe Textur in %s und %s; andere Vorlage wählen" % (slot, andere[0]))
+            raise ModellImportFehler("Template uses the same texture in %s and %s, choose another template" % (slot, andere[0]))
         tausch[alt[slot]] = neu
     return _res(kennung, "GfxMaterialRes", grafik.material_aendern(vorlage, konstanten=konstanten, texturen=tausch))
 
@@ -849,13 +1082,155 @@ def vorlage_material_finden(quelle, shader: str = "object_opaque.nefx2", slots=(
     return None
 
 
+# --------------------------------------------------------------------------- Umsetzung in einem Schritt (M1)
+#: Version der Umsetzung; geht in den Schlüssel des Zwischenspeichers ein (strecke/eigene_modelle.py). Erhöhen, wenn
+#: sich die erzeugten Ressourcen bei gleicher Eingabe ändern.
+UMSETZUNG_VERSION = 2          # 2 = M5a (Transparenz, Maske, doppelseitig, Glanz/Metall)
+#: Texturslots, die das Vorlagenmaterial haben muss (Shader ``object_opaque``)
+VORLAGE_SLOTS = ("me_diffuseMap", "me_normalMap", "me_surfaceMap")
+NAME_MUSTER = re.compile(r"[a-z][a-z0-9_]{0,47}")
+
+
+@dataclass
+class Umsetzung:
+    """Ergebnis von ``modell_umsetzen``: alle Ressourcen eines eigenen Modells (Modell, Materialien, Texturen)."""
+
+    name: str
+    basis: str                            # eaid://…/<name>.idf
+    ressourcen: List[Ressource]
+    bericht: dict                         # JSON-fähig
+    hinweise: List[str]
+    bau: Optional[Bau] = None             # None, wenn aus dem Zwischenspeicher geladen (keine Eingabegeometrie)
+
+    @property
+    def modell(self) -> str:
+        return self.basis[:-len(".idf")]
+
+
+def modell_umsetzen(szenen, name: str, wurzel: str, vorlage_material: bytes, *, sichtweite_m: float = 2500.0,
+                    lod_abstaende: Optional[Sequence[float]] = None, textur_max: int = 1024,
+                    textur_format: int = FORMAT_DIFFUS, normalen: str = "gl", streng: bool = True,
+                    vorlagen: Optional[Dict[str, bytes]] = None) -> Umsetzung:
+    """Setzt eine Szene (oder eine Liste, LOD 0 zuerst) vollständig in Spielressourcen um.
+
+    ``name``: Modellname (Kleinbuchstaben, Ziffern, ``_``; üblich ``usr_<name>``). ``wurzel``: Objektordner der
+    Strecke, ``eaid://environment_package/tracks/<code>/objects``. Es entstehen ``<wurzel>/idf/<name>.idf…``,
+    ``<wurzel>/materials/<name>_<NN>.material`` und ``<wurzel>/textures/<name>_…``.
+
+    ``vorlage_material``: Bytes eines ``object_opaque``-Materials (Slots ``VORLAGE_SLOTS``); davon bleiben nur Shader
+    und Konstanten. Jedes Material bekommt eigene neutrale Karten (matt, nicht metallisch, flache Normalen; M0b),
+    dazu aus dem Quellmaterial: Basisfarbe → ``me_diffuseTint``, Basisfarb-Bild → ``me_diffuseMap`` (BC7 sRGB bzw.
+    ``textur_format``, höchstens ``textur_max`` Pixel Kante), Normalenkarte → ``me_normalMap`` (BC5; ``normalen`` =
+    Konvention der Quelle: ``gl`` für Blender/glTF, ``dx``). Gleiche Bilder werden nur einmal gespeichert.
+
+    M5a: Metall, Rauheit und Verdeckung (Faktoren oder Bilder) → ``me_surfaceMap`` (``oberflaechenkarte``; matt und
+    nicht metallisch bleibt die neutrale Karte). ``alphaMode`` ``BLEND``/``MASK`` → Material als Kopie von
+    ``vorlagen["alpha"]`` (Shader ``object_alpha``) bzw. ``vorlagen["mask"]`` (``object_mask``), Farbkarte mit Alpha
+    in BC3 sRGB, ``alphaCutoff`` → ``me_alphaThreshold``, Zeichnungs-Flag 0. Fehlt die Vorlage, wird das Material
+    deckend gezeichnet (Hinweis). Doppelseitige Materialien bekommen ihre Rückseiten als Geometrie."""
+    if isinstance(szenen, Szene):
+        szenen = [szenen]
+    if not NAME_MUSTER.fullmatch(name or ""):
+        raise ModellImportFehler("Model name %r is invalid (lower-case letters, digits and _, starting with a letter)" % name)
+    if not wurzel.startswith("eaid://") or wurzel.endswith("/"):
+        raise ModellImportFehler("Object folder must be eaid://…/objects")
+    vorhanden = grafik.Material.aus_bytes(vorlage_material).texturen()
+    fehlend = [s for s in VORLAGE_SLOTS if s not in vorhanden]
+    if fehlend:
+        raise ModellImportFehler("Template material has no texture slot %s (available: %s)" % (
+            fehlend[0], ", ".join(sorted(vorhanden))))
+    hinweise: List[str] = []
+    tex = "%s/textures/%s" % (wurzel, name)
+    extra, neutral = neutrale_karten(tex + "_neutral")
+    weiss = np.full((NEUTRAL_KANTE, NEUTRAL_KANTE, 4), 255, np.uint8)
+    extra += textur_ressourcen(tex + "_neutral_d.tif", weiss, FORMAT_DIFFUS)
+    neutral["me_diffuseMap"] = tex + "_neutral_d.tif"
+    reihenfolge: List[str] = []
+    for s in szenen:
+        for t in s.teile:
+            if t.material not in reihenfolge:
+                reihenfolge.append(t.material)
+    bilder: Dict[Tuple[str, bytes], str] = {}      # (Art, Hash) → Kennung: gleiche Bilder nur einmal
+    texturen, materialien, mat_bericht = [], {}, {}
+    opak: Dict[str, bool] = {}
+    doppelt: Dict[str, bool] = {}
+
+    def textur(nr: int, art: str, bild: np.ndarray, fmt: int, mat: str) -> str:
+        h0, w0 = np.asarray(bild).shape[:2]
+        bild, geaendert = bild_vorbereiten(bild, textur_max)
+        if geaendert:
+            hinweise.append("Material %s: image %d×%d resized to %d×%d (powers of two, at most %d)" % (
+                mat, w0, h0, bild.shape[1], bild.shape[0], textur_max))
+        schluessel = (art, hashlib.sha256(repr(bild.shape).encode() + bild.tobytes()).digest())
+        if schluessel not in bilder:
+            kennung = "%s_%02d_%s.tif" % (tex, nr, art)
+            res = textur_ressourcen(kennung, bild, fmt)
+            extra.extend(res)
+            bilder[schluessel] = kennung
+            texturen.append({"kennung": kennung, "breite": int(bild.shape[1]), "hoehe": int(bild.shape[0]), "format": int(fmt),
+                             "bytes": int(len(res[0].fragmente[1][1]))})
+        return bilder[schluessel]
+
+    for i, m in enumerate(reihenfolge):
+        q = next((s.materialien[m] for s in szenen if m in s.materialien), QuellMaterial(m))
+        slots = dict(neutral)
+        roh_alpha = (vorlagen or {}).get(VORLAGE_ART.get(q.alpha, ""))
+        if q.bild_basisfarbe is not None and roh_alpha is None:      # mit Alpha-Vorlage entsteht unten die Karte _da
+            slots["me_diffuseMap"] = textur(i + 1, "d", q.bild_basisfarbe, textur_format, m)
+        if q.bild_normal is not None:
+            slots["me_normalMap"] = textur(i + 1, "n", normalenkarte_fuer_spiel(q.bild_normal, normalen), FORMAT_NORMAL, m)
+        karte = oberflaechenkarte(q)
+        oberflaeche = oberflaeche_konstant(q)
+        if karte is not None:
+            slots["me_surfaceMap"] = textur(i + 1, "s", karte, FORMAT_OBERFLAECHE, m)
+        elif oberflaeche != tuple(OBERFLAECHE_NEUTRAL):
+            slots["me_surfaceMap"] = textur(i + 1, "s", np.full((NEUTRAL_KANTE, NEUTRAL_KANTE, 4), oberflaeche, np.uint8),
+                                            FORMAT_OBERFLAECHE, m)
+        toenung = tuple(float(min(1.0, max(0.0, x))) for x in q.basisfarbe[:3])
+        konstanten: Dict[str, Sequence[float]] = {"me_diffuseTint": toenung}
+        roh, art = vorlage_material, "opaque"
+        if q.alpha in VORLAGE_ART:
+            if roh_alpha is None:
+                hinweise.append("Material %s: the carrier has no %s material, transparency (%s) is drawn opaque" % (
+                    m, SHADER_ALPHA[q.alpha].split(".")[0], q.alpha))
+            else:
+                roh, art = roh_alpha, VORLAGE_ART[q.alpha]
+                slots["me_diffuseMap"] = textur(i + 1, "da", farbkarte_mit_alpha(q), FORMAT_DIFFUS_ALPHA, m)
+                schwelle = float(min(1.0, max(0.0, q.alpha_schwelle))) if q.alpha == "MASK" else 0.0
+                konstanten["me_alphaThreshold"] = (schwelle,)
+                konstanten["me_shadowAlphaThreshold"] = (schwelle if q.alpha == "MASK" else 0.5,)
+        elif q.alpha != "OPAQUE":
+            hinweise.append("Material %s: unknown alpha mode %s, the material is drawn opaque" % (m, q.alpha))
+        opak[m] = art == "opaque"
+        doppelt[m] = bool(q.doppelseitig)
+        kennung = "%s/materials/%s_%02d.material" % (wurzel, name, i + 1)
+        extra.append(material_aus_vorlage(roh, kennung, slots, konstanten))
+        materialien[m] = kennung
+        mat_bericht[m] = {"kennung": kennung, "toenung": [round(x, 4) for x in toenung], "art": art,
+                          "doppelseitig": bool(q.doppelseitig),
+                          "oberflaeche": "bild" if karte is not None else [int(x) for x in oberflaeche[:3]],
+                          "texturen": {s: k.rsplit("/", 1)[-1] for s, k in slots.items()}}
+        if art != "opaque":
+            mat_bericht[m]["alpha_schwelle"] = round(konstanten["me_alphaThreshold"][0], 4)
+    basis = "%s/idf/%s.idf" % (wurzel, name)
+    bau = modell_bauen(szenen, basis, materialien, sichtweite_m=sichtweite_m, lod_abstaende=lod_abstaende, streng=streng,
+                       opak=opak, doppelseitig=doppelt)
+    ressourcen = bau.ressourcen + extra
+    bericht = dict(bau.bericht)
+    bericht.update(name=name, modell=basis[:-len(".idf")], materialien=mat_bericht, texturen=texturen,
+                   ressourcen=len(ressourcen), bytes=int(sum(len(f[1]) for r in ressourcen for f in r.fragmente)),
+                   textur_bytes=int(sum(t["bytes"] for t in texturen)), normalen=normalen, textur_max=int(textur_max),
+                   version=UMSETZUNG_VERSION)
+    return Umsetzung(name, basis, ressourcen, bericht, hinweise + bau.hinweise, bau)
+
+
 # --------------------------------------------------------------------------- Archiv
 def in_archiv(archiv: erp.ErpFile, ressourcen: Sequence[Ressource], ersetzen: bool = False) -> List[str]:
     """Ressourcen in ein ERP-Archiv im Speicher eintragen (Typfeld, Fragment-Flags und Kompression wie die
     Originale, MD5 neu). Vorhandene Kennungen sind ein Fehler, außer ``ersetzen``."""
     doppelt = [r.kennung for r in ressourcen if archiv.find(r.kennung) is not None]
     if doppelt and not ersetzen:
-        raise ModellImportFehler("Kennung schon vorhanden: %s" % doppelt[0])
+        raise ModellImportFehler("Identifier already exists: %s" % doppelt[0])
     neu = []
     for r in ressourcen:
         if archiv.find(r.kennung) is not None:
