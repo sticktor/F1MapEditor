@@ -1,4 +1,18 @@
 ﻿en;de;ko;ort
+Game folder required for track surface {} (Tools → Set F1 25 game folder);Spielordner nötig für Fahrbahnoberfläche {} (Werkzeuge → F1-25-Spielordner festlegen);트랙 표면 {}에 게임 폴더가 필요합니다 (도구 → F1 25 게임 폴더 설정);asphalt_vorlagen.py
+Game folder required for tyre marks {};Spielordner nötig für Reifenspuren {};타이어 마크 {}에 게임 폴더가 필요합니다;asphalt_vorlagen.py
+No track ERP for {} in the game folder;Keine Strecken-ERP für {} im Spielordner;게임 폴더에 {}의 트랙 ERP가 없습니다;asphalt_vorlagen.py
+Not an F1 25 game folder: {};Kein F1-25-Spielordner: {};F1 25 게임 폴더가 아닙니다: {};asphalt_vorlagen.py
+por_track_a has none of the slots {};por_track_a hat keinen der Plätze {};por_track_a에 슬롯 {} 중 어느 것도 없습니다;asphalt_vorlagen.py
+Skid texture missing for {}: {};Reifenspurtextur fehlt für {}: {};{}의 타이어 마크 텍스처가 없습니다: {};asphalt_vorlagen.py
+Template {} has no skid texture;Vorlage {} hat keine Reifenspurtextur;템플릿 {}에 타이어 마크 텍스처가 없습니다;asphalt_vorlagen.py
+Template {} has no texture slots;Vorlage {} hat keine Texturplätze;템플릿 {}에 텍스처 슬롯이 없습니다;asphalt_vorlagen.py
+Textures missing after copying for {}: {};Texturen fehlen nach dem Kopieren für {}: {};{} 복사 후 텍스처가 없습니다: {};asphalt_vorlagen.py
+Textures missing in the game data for {}: {};Texturen fehlen in den Spieldaten für {}: {};{}의 게임 데이터에 텍스처가 없습니다: {};asphalt_vorlagen.py
+Unknown colour tone {} (possible: {});Farbton {} unbekannt (möglich: {});알 수 없는 색조 {} (가능: {});asphalt_vorlagen.py
+Unknown template {} (not in {});Vorlage {} unbekannt (nicht in {});알 수 없는 템플릿 {} ({}에 없음);asphalt_vorlagen.py
+{} has no slot {};{} hat keinen Platz {};{}에 슬롯 {}이(가) 없습니다;asphalt_vorlagen.py
+{} missing in the carrier;{} fehlt im Träger;캐리어에 {}이(가) 없습니다;asphalt_vorlagen.py
 boxengasse.tempolimit_kmh must be {} (the values of the game's tracks);boxengasse.tempolimit_kmh muss {} sein (Werte der Spielstrecken);boxengasse.tempolimit_kmh는 {} 이어야 합니다 (게임 트랙들의 값);definition.py
 Centreline needs at least 4 points (has {});Mittellinie braucht mindestens 4 Punkte (hat {});중심선에는 점이 4개 이상 필요합니다 (현재 {});definition.py
 Centreline points must be finite;Mittellinienpunkte müssen endlich sein;중심선 점은 유한해야 합니다;definition.py
@@ -53,13 +67,19 @@ Unknown segment type {} (gerade | bogen | klothoide);Unbekannter Segmenttyp {} (
 {}.{} must be finite and > 0;{}.{} muss endlich und > 0 sein;{}.{} 은(는) 유한하고 0보다 커야 합니다;definition.py
 {}.{} must be links or rechts;{}.{} muss links oder rechts sein;{}.{} 은(는) links 또는 rechts 여야 합니다;definition.py
 {}.{} must be ≥ {};{}.{} muss ≥ {} sein;{}.{} 은(는) {} 이상이어야 합니다;definition.py
+File not found: {};Datei nicht gefunden: {};파일을 찾을 수 없습니다: {};eigene_modelle.py
 LOD objects must be numbered without gaps (_LOD1, _LOD2 …), found {};LOD-Objekte müssen lückenlos nummeriert sein (_LOD1, _LOD2 …), gefunden {};;eigene_modelle.py
+Material {}: unknown alpha mode {}, the material is drawn opaque;Material {}: unbekannter Alpha-Modus {}, das Material wird deckend gezeichnet;;eigene_modelle.py
 Model is only {} m in size, check the unit (1 Blender unit = 1 m);Modell ist nur {} m groß, Einheit prüfen (1 Blender-Einheit = 1 m);;eigene_modelle.py
 Model is {} m in size, check the unit (1 Blender unit = 1 m);Modell ist {} m groß, Einheit prüfen (1 Blender-Einheit = 1 m);;eigene_modelle.py
 Model name {} has no usable characters (letters, digits, _);Modellname {} hat keine brauchbaren Zeichen (Buchstaben, Ziffern, _);;eigene_modelle.py
 Model starts {} m above its origin. With ground mode Automatic the build puts its lower edge on the ground;Modell beginnt {} m über seinem Ursprung. Mit Bodenbezug Automatisch setzt der Bau die Unterkante auf den Boden;;eigene_modelle.py
 Model {} already exists in this project;Modell {} gibt es in diesem Projekt schon;;eigene_modelle.py
 Model {} is not in this project;Modell {} gibt es in diesem Projekt nicht;;eigene_modelle.py
+Model {}, material {}: {};Modell {}, Material {}: {};;eigene_modelle.py
+Model {}: animation must be an or aus ({});Modell {}: Animation muss an oder aus sein ({});;eigene_modelle.py
+Model {}: collision must be keine or quader ({});Modell {}: Kollision muss keine oder quader sein ({});모델 {}: 충돌은 keine 또는 quader 여야 합니다 ({});eigene_modelle.py
+Model {}: effekte must map material names to effects;Modell {}: effekte muss Materialnamen Effekten zuordnen;;eigene_modelle.py
 Model {}: field {} must be a finite number ({});Modell {}: Feld {} muss eine endliche Zahl sein ({});;eigene_modelle.py
 Model {}: largest texture size must be a power of two from 64 to 2048 ({});Modell {}: größte Texturkante muss eine Zweierpotenz von 64 bis 2048 sein ({});;eigene_modelle.py
 Model {}: normal map convention must be gl or dx ({});Modell {}: Konvention der Normalenkarten muss gl oder dx sein ({});;eigene_modelle.py
@@ -78,7 +98,6 @@ Unknown model option {};Unbekannte Modelloption {};;eigene_modelle.py
 {} cannot be read: {};{} ist nicht lesbar: {};;eigene_modelle.py
 {} is not a .glb, .gltf or .obj file;{} ist keine .glb-, .gltf- oder .obj-Datei;;eigene_modelle.py
 {} refers to the separate file {}, export as glTF Binary (.glb) instead;{} verweist auf die getrennte Datei {}, stattdessen als glTF Binary (.glb) exportieren;;eigene_modelle.py
-{} triangles in LOD 0 (largest model of the game: 254,000);{} Dreiecke in LOD 0 (größtes Modell des Spiels: 254.000);;eigene_modelle.py
 Output would overwrite the input: {};Ausgabe würde Eingabe überschreiben: {};출력이 입력을 덮어씁니다: {};erzeugung.py
 Protected output folder: {};Geschützter Ausgabeordner: {};보호된 출력 폴더: {};erzeugung.py
 Track edges folded or intersecting: {};Fahrbahnränder gefaltet oder geschnitten: {};트랙 가장자리가 접히거나 교차합니다: {};erzeugung.py
@@ -103,7 +122,6 @@ Vertex-triangle mapping out of date;Vertex-Dreieck-Zuordnung veraltet;꼭짓점-
 {} duplicate points in the ground surface;{} doppelte Punkte in der Grundfläche;바닥면에 중복 점 {}개;gelaende.py
 Edge lines are wider than the road;Randlinien sind breiter als die Fahrbahn;가장자리 선이 노면보다 넓습니다;geometrie.py
 "Extent {} × {} m (plus track edge) does not fit into the track area of the game world ({} × {} m); make the track smaller (import with fit) or move points in the editor.";"Ausdehnung {} × {} m (plus Fahrbahnrand) passt nicht in den Streckenbereich der Spielwelt ({} × {} m); Strecke verkleinern (Import mit Einpassen) oder Punkte im Editor verschieben.";범위 {} × {} m (트랙 가장자리 포함)가 게임 월드의 트랙 영역 ({} × {} m)에 맞지 않습니다. 트랙을 줄이거나 (맞춤 가져오기) 에디터에서 점을 옮기세요.;importe.py
-File not found: {};Datei nicht gefunden: {};파일을 찾을 수 없습니다: {};importe.py
 Game track {} cannot be read: {};Spielstrecke {} nicht lesbar: {};게임 트랙 {}을(를) 읽을 수 없습니다: {};importe.py
 Game world offset set to [{}, 0, {}] so the track lies in the hole of the outer terrain.;Spielweltversatz auf [{}, 0, {}] gestellt, damit die Strecke im Loch des Außengeländes liegt.;트랙이 바깥 지형의 구멍 안에 놓이도록 게임 월드 오프셋을 [{}, 0, {}]로 정했습니다.;importe.py
 GPX cannot be read: {};GPX nicht lesbar: {};GPX를 읽을 수 없습니다: {};importe.py
@@ -124,6 +142,7 @@ TUM CSV needs the columns x_m, y_m, w_tr_right_m, w_tr_left_m and at least 8 row
 TUM CSV: column {} is missing.;TUM-CSV: Spalte {} fehlt.;TUM CSV: 열 {}이(가) 없습니다.;importe.py
 Vehicle slot layer of {} is missing in this ERP.;Fahrzeugplatz-Layer von {} fehlt in dieser ERP.;이 ERP에 {}의 차량 슬롯 레이어가 없습니다.;importe.py
 ziel_abstand_m must be at least 1 m.;ziel_abstand_m muss mindestens 1 m sein.;ziel_abstand_m 은 1 m 이상이어야 합니다.;importe.py
+Object {}: collision only works for own models (game model {} keeps none);Objekt {}: Kollision gibt es nur für eigene Modelle (Spielmodell {} bleibt ohne);오브젝트 {}: 충돌은 자체 모델에서만 작동합니다 (게임 모델 {}은(는) 충돌 없음);kollision.py
 AI gate does not cross a track limit;KI-Gate schneidet eine Streckengrenze nicht;AI 게이트가 트랙 한계를 가로지르지 않습니다;logik.py
 Grid is longer than the track;Startaufstellung ist länger als die Strecke;그리드가 트랙보다 깁니다;logik.py
 Grid slot lies outside the road;Startplatz liegt außerhalb der Fahrbahn;그리드 슬롯이 노면 밖에 있습니다;logik.py
@@ -136,9 +155,12 @@ derivative 0, 1 or 2;ableitung 0, 1 oder 2;미분 차수 0, 1 또는 2;mittellin
 Duplicate consecutive points in the centreline;Doppelte aufeinanderfolgende Punkte in der Mittellinie;중심선에 연속된 중복 점이 있습니다;mittellinie.py
 Road width per side must be > 0.5 m;Fahrbahnbreite je Seite muss > 0,5 m sein;한쪽 노면 너비는 0.5 m보다 커야 합니다;mittellinie.py
 Spline needs at least 3 points;Spline braucht mindestens 3 Punkte;스플라인에는 점이 3개 이상 필요합니다;mittellinie.py
-Animations are ignored;Animationen werden ignoriert;;modell_import.py
+Animation {} has no duration and is ignored;Animation {} hat keine Dauer und wird ignoriert;;modell_import.py
+Animation {} is {} s long (at most {} s);Animation {} ist {} s lang (höchstens {} s);;modell_import.py
+Animation {}: negative scale of {} is not supported;Animation {}: negative Skalierung von {} wird nicht unterstützt;;modell_import.py
 Base identifier must be eaid://…/<name>.idf;Basiskennung muss eaid://…/<name>.idf sein;;modell_import.py
 GLB without a JSON chunk;GLB ohne JSON-Teil;;modell_import.py
+glTF: animation sampler with mismatching key counts;glTF: Animations-Sampler mit unpassender Schlüsselzahl;;modell_import.py
 glTF: buffer {} has no data;glTF: Puffer {} ohne Daten;;modell_import.py
 glTF: compressed geometry is not supported;glTF: komprimierte Geometrie wird nicht unterstützt;;modell_import.py
 glTF: extension {} is not supported (export without compression);glTF: Erweiterung {} wird nicht unterstützt (ohne Kompression exportieren);;modell_import.py
@@ -146,26 +168,27 @@ glTF: no triangles found;glTF: keine Dreiecke gefunden;;modell_import.py
 glTF: only version 2.0 is supported;glTF: nur Version 2.0 wird unterstützt;;modell_import.py
 glTF: reference outside the folder: {};glTF: Verweis außerhalb des Ordners: {};;modell_import.py
 glTF: sparse accessors are not supported;glTF: dünn besetzte Accessoren (sparse) werden nicht unterstützt;;modell_import.py
+glTF: unknown interpolation {};glTF: unbekannte Interpolation {};;modell_import.py
 Identifier already exists: {};Kennung schon vorhanden: {};;modell_import.py
 Image must be RGBA;Bild muss RGBA sein;;modell_import.py
-Image {}×{} resized to {}×{} (powers of two, at most {});Bild {}×{} auf {}×{} umgerechnet (Zweierpotenzen, höchstens {});;modell_import.py
 LOD distances: {} values instead of {};LOD-Abstände: {} Werte statt {};;modell_import.py
 LOD {} does not have fewer triangles than LOD {};LOD {} hat nicht weniger Dreiecke als LOD {};;modell_import.py
+Material effect must be wasser, lauftext or fahne ({});Materialeffekt muss wasser, lauftext oder fahne sein ({});;modell_import.py
+Material effect: field {} must be u, v, helligkeit or tempo with a number;Materialeffekt: Feld {} muss u, v, helligkeit oder tempo mit einer Zahl sein;;modell_import.py
 Material identifier must end in .material;Materialkennung muss auf .material enden;;modell_import.py
 Material slots are not unique: {};Materialslots sind nicht eindeutig: {};;modell_import.py
 Material {}: image {}×{} resized to {}×{} (powers of two, at most {});Material {}: Bild {}×{} auf {}×{} umgerechnet (Zweierpotenzen, höchstens {});;modell_import.py
-Material {}: KHR_texture_transform is ignored;Material {}: KHR_texture_transform wird ignoriert;;modell_import.py
-Material {}: texture uses UV set {}, the game material uses UV0;Material {}: Textur nutzt UV-Satz {}, das Spielmaterial nimmt UV0;;modell_import.py
+Material {}: the carrier has no {} material, the effect {} is left out;Material {}: Der Träger hat kein {}-Material, der Effekt {} entfällt;;modell_import.py
 Material {}: the carrier has no {} material, transparency ({}) is drawn opaque;Material {}: Der Träger hat kein Material {}, Transparenz ({}) wird deckend gezeichnet;;modell_import.py
-Material {}: unknown alpha mode {}, the material is drawn opaque;Material {}: unbekannter Alpha-Modus {}, das Material wird deckend gezeichnet;;modell_import.py
+Material {}: unknown effect {} (water, scroll or flag);Material {}: unbekannter Effekt {} (water, scroll oder flag);;modell_import.py
+Material {}: {} must be a number;Material {}: {} muss eine Zahl sein;;modell_import.py
 Mesh LOD {} is invalid: {};Mesh LOD {} ist fehlerhaft: {};;modell_import.py
 Model name {} is invalid (lower-case letters, digits and _, starting with a letter);Modellname {} ist ungültig (Kleinbuchstaben, Ziffern und _, beginnend mit einem Buchstaben);;modell_import.py
 More than 99 materials;Mehr als 99 Materialien;;modell_import.py
-Morph targets are ignored;Morph-Ziele werden ignoriert;;modell_import.py
+Moving part {} is missing in the animation of LOD 0;Bewegtes Teil {} fehlt in der Animation von LOD 0;;modell_import.py
 No game materials for: {};Keine Spielmaterialien für: {};;modell_import.py
 Not a GLB file of version 2: {};Keine GLB-Datei der Version 2: {};;modell_import.py
 OBJ without faces: {};OBJ ohne Flächen: {};;modell_import.py
-OBJ: materials by name only (the MTL file is not read);OBJ: Materialien nur dem Namen nach (die MTL-Datei wird nicht gelesen);;modell_import.py
 Object folder must be eaid://…/objects;Objektordner muss eaid://…/objects sein;;modell_import.py
 Part {} is empty;Teil {} ist leer;;modell_import.py
 Part {}: no UV, the texture appears in one colour;Teil {}: UV fehlt, die Textur erscheint einfarbig;;modell_import.py
@@ -175,8 +198,6 @@ Part {}: positions contain NaN/Inf;Teil {}: Positionen enthalten NaN/Inf;;modell
 Part {}: triangle indices outside the vertex list;Teil {}: Dreiecksindizes außerhalb der Vertexliste;;modell_import.py
 Part {}: UV up to {}, imprecise with 16-bit floats (reduce the tiling);Teil {}: UV bis {}, mit 16-Bit-Gleitkomma ungenau (Kachelung verkleinern);;modell_import.py
 Part {}: {} degenerate triangles removed;Teil {}: {} entartete Dreiecke entfernt;;modell_import.py
-Primitive without a triangle list left out (mode {});Primitive ohne Dreiecksliste ausgelassen (mode {});;modell_import.py
-Skinning is ignored (static objects only);Skinning wird ignoriert (nur statische Objekte);;modell_import.py
 Template material has no texture slot {} (available: {});Vorlagenmaterial hat keinen Texturslot {} (vorhanden: {});;modell_import.py
 Template uses the same texture in {} and {}, choose another template;Vorlage nutzt dieselbe Textur in {} und {}, andere Vorlage wählen;;modell_import.py
 Texture identifier must end in .tif;Texturkennung muss auf .tif enden;;modell_import.py
@@ -184,6 +205,7 @@ Texture size {}×{} is not a power of two ≥ 4;Texturgröße {}×{} ist keine Z
 Unknown format {} (expected .glb, .gltf or .obj);Unbekanntes Format {} (erwartet .glb, .gltf oder .obj);;modell_import.py
 Unknown normal map convention {} (gl or dx);Unbekannte Konvention der Normalenkarte {} (gl oder dx);;modell_import.py
 {} triangles in LOD 0 (99 % of the game's models have fewer than 42,000);{} Dreiecke in LOD 0 (99 % der Spielmodelle haben unter 42.000);;modell_import.py
+{} triangles in LOD 0 (largest model of the game: 254,000);{} Dreiecke in LOD 0 (größtes Modell des Spiels: 254.000);;modell_import.py
 Check without build;Prüfung ohne Bau;빌드 없이 검사;neue_strecke_tool.py
 Checking the logic;Prüfung der Logik;로직 검사;neue_strecke_tool.py
 Cleaning up the world;Welt aufräumen;세계 정리;neue_strecke_tool.py
@@ -240,6 +262,7 @@ manifest.ers.{} = {}, zone {} starts at {};manifest.ers.{} = {}, Zone {} beginnt
 Minimap {}.{} = {} not rounded to mm;Minimap {}.{} = {} nicht auf mm gerundet;미니맵 {}.{} = {} 이(가) mm 단위로 반올림되지 않았습니다;pruefregeln.py
 Model usr_{} has {} triangles in LOD 0 (99 % of the game's models have fewer than 42,000);Modell usr_{} hat {} Dreiecke in LOD 0 (99 % der Spielmodelle haben unter 42.000);;pruefregeln.py
 Model usr_{} is not placed anywhere;Modell usr_{} ist nirgends platziert;;pruefregeln.py
+Model usr_{} moves, but its collision box stays at the rest pose;Modell usr_{} bewegt sich, seine Kollisionsbox bleibt aber in der Ruhelage;;pruefregeln.py
 Model usr_{}: {};Modell usr_{}: {};;pruefregeln.py
 No corner of the pit route has a pair_id to a track corner (25 of 30 originals have one);Keine Kurve der Boxenroute mit pair_id zur Streckenkurve (25/30 Originale haben eine);피트 경로의 어떤 코너도 트랙 코너와 pair_id 가 없습니다 (오리지널 30개 중 25개에는 있습니다);pruefregeln.py
 Only {} of {} DRS zones created: no further suitable straight;Nur {} von {} DRS-Zonen erzeugt: keine weitere geeignete Gerade;DRS 존 {}개 중 {}개만 만들었습니다. 적당한 직선이 더 없습니다;pruefregeln.py
@@ -264,6 +287,7 @@ Track edge outside X/Z ±{} m at {} stations (including offset {});Fahrbahnrand 
 Track extends beyond the hole of the outer terrain: the build will stop. Under Tools, set the game world offset to [{}, {}, {}];Strecke ragt über das Loch des Außenterrains hinaus: Der Bau bricht ab. Unter Werkzeuge den Spielweltversatz auf [{}, {}, {}] stellen;트랙이 바깥 지형 구멍 밖으로 나갑니다. 빌드가 멈춥니다. 도구에서 게임 세계 오프셋을 [{}, {}, {}](으)로 설정하세요;pruefregeln.py
 Track length {} m (FIA {}–{} km);Streckenlänge {} m (FIA {}–{} km);트랙 길이 {} m (FIA {}–{} km);pruefregeln.py
 Track length {} m (longest original track {} m);Streckenlänge {} m (längste Originalstrecke {} m);트랙 길이 {} m (가장 긴 오리지널 트랙 {} m);pruefregeln.py
+Track surface/tyre marks need the F1 25 game folder (Tools → Set F1 25 game folder);Fahrbahnoberfläche/Reifenspuren brauchen den F1-25-Spielordner (Werkzeuge → F1-25-Spielordner festlegen);트랙 표면/타이어 마크에는 F1 25 게임 폴더가 필요합니다 (도구 → F1 25 게임 폴더 설정);pruefregeln.py
 Track width {} m at {} m (FIA ≥ {} m);Fahrbahnbreite {} m bei {} m (FIA ≥ {} m);{} m 지점의 트랙 너비 {} m (FIA ≥ {} m);pruefregeln.py
 TrackSpace has {} closed and {} open splines (expected 1 and 1);TrackSpace hat {} geschlossene und {} offene Splines (erwartet 1 und 1);TrackSpace에 닫힌 스플라인 {}개, 열린 스플라인 {}개가 있습니다 (기대: 1과 1);pruefregeln.py
 "TrackSpace/AI gates/TS lie {} m above the driving physics (Portimão +0.20 m); drivable up to v20, effect of +0.20 m not tested in game.";"TrackSpace/KI-Gates/TS liegen {} m über der Fahrphysik (Portimão +0,20 m); fahrbar bis v20, Wirkung von +0,20 m im Spiel ungeprüft.";TrackSpace/AI 게이트/TS가 주행 물리보다 {} m 위에 있습니다 (포르티망 +0.20 m). v20까지는 달릴 수 있으며, +0.20 m의 효과는 게임에서 시험하지 않았습니다.;pruefregeln.py
@@ -281,7 +305,9 @@ Zone {}.{}: {} m to the finish line, template {} m;Zone {}.{}: {} m zur Ziellini
 {} id {} refers to missing gate {};{} id {} verweist auf fehlendes Gate {};{} id {}이(가) 없는 게이트 {}을(를) 가리킵니다;pruefregeln.py
 {} id {}: pair_id {} is not a gate;{} id {}: pair_id {} ist kein Gate;{} id {}: pair_id {}은(는) 게이트가 아닙니다;pruefregeln.py
 "{} logic points outside X/Z ±{} m; outermost: {}";"{} Logikpunkte außerhalb X/Z ±{} m; äußerster: {}";로직 점 {}개가 X/Z ±{} m 밖입니다. 가장 바깥: {};pruefregeln.py
-{} PVS cells with a 60 m corridor (originals at most {}): build with a smaller --pvs-korridor;{} PVS-Zellen bei 60-m-Korridor (Originale höchstens {}) – Bau mit kleinerem --pvs-korridor;60 m 복도의 PVS 셀 {}개 (오리지널 최대 {}): 더 작은 --pvs-korridor 로 빌드하세요;pruefregeln.py
+{} pit boxes requested, the build places {} (the carrier has {} teams plus MyTeam);{} Boxen angegeben, der Bau setzt {} (der Träger hat {} Teams plus MyTeam);피트 박스 {}개를 지정했지만 빌드는 {}개를 배치합니다 (트랙 캐리어에는 {}개 팀과 MyTeam이 있음);pruefregeln.py
+{} PVS cells with a 60 m corridor (originals at most {}), even 30 m is too many: make the track shorter;{} PVS-Zellen mit 60-m-Korridor (Originale höchstens {}), auch 30 m sind zu viele: Strecke kürzen;60 m 통로에서 PVS 셀 {}개(원본 최대 {}), 30 m도 너무 많음: 트랙을 짧게 하세요;pruefregeln.py
+{} PVS cells with a 60 m corridor (originals at most {}): the build narrows the visibility corridor automatically to {} m ({} cells);{} PVS-Zellen mit 60-m-Korridor (Originale höchstens {}): Der Bau verengt den Sichtkorridor automatisch auf {} m ({} Zellen);60 m 통로에서 PVS 셀 {}개(원본 최대 {}): 빌드가 시야 통로를 자동으로 {} m로 좁힘(셀 {}개);pruefregeln.py
 {} reaches into a corner with radius {} m at {} m;{1} reicht bei {3} m in eine Kurve mit Radius {2} m;{}이(가) 반경 {} m 코너로 들어감 ({} m 지점);pruefregeln.py
 "{} wall triangles lie on the pit line; the build removes them (playtest v6)";"{} Mauerdreiecke liegen auf der Boxenlinie; der Bau entfernt sie (Spieltest v6)";벽 삼각형 {}개가 피트 라인 위에 있습니다. 빌드가 제거합니다 (플레이 테스트 v6);pruefregeln.py
 {}: {} m long;{}: {} m lang;{}: 길이 {} m;pruefregeln.py
@@ -446,6 +472,9 @@ No pit line in the game track.;Keine Boxenlinie in der Spielstrecke.;게임 트�
 "Pit lane too short ({} m) for the generator; it stays automatic.";"Boxengasse zu kurz ({} m) für den Generator; sie bleibt automatisch.";피트 레인이 생성기에 너무 짧습니다 ({} m). 자동으로 둡니다.;spielimport.py
 "Pit line does not run beside the track; pit lane stays automatic as before.";"Boxenlinie liegt nicht neben der Strecke; Boxengasse wie bisher automatisch.";피트 선이 트랙 옆으로 지나지 않습니다. 피트 레인은 전처럼 자동입니다.;spielimport.py
 Start/finish line placed at the starting grid ({} m after the game's timing line).;Start-Ziel-Linie an die Startaufstellung gelegt ({} m nach der Zeitlinie des Spiels).;출발/결승선을 출발 그리드에 놓았습니다 (게임 계측선에서 {} m 뒤).;spielimport.py
+New code {} is a game track;Neuer Code {} ist eine Spielstrecke;새 코드 {}는 게임 트랙입니다;spieltraeger.py
+Track {} not found in the game folder;Strecke {} nicht im Spielordner gefunden;게임 폴더에서 트랙 {}을(를) 찾을 수 없습니다;spieltraeger.py
+UI resource collides with the track: {};UI-Ressource kollidiert mit der Strecke: {};UI 리소스가 트랙과 충돌합니다: {};spieltraeger.py
 , all files in the package;, alle Dateien im Paket;, 패키지의 모든 파일;streckencode.py
 , missing in the package: {};, fehlen im Paket: {};, 패키지에 없음: {};streckencode.py
 Duplicate ID after renaming: {};Kennung nach Umbenennung doppelt: {};이름을 바꾼 뒤 ID가 중복됩니다: {};streckencode.py
@@ -473,6 +502,7 @@ Unexpected copy target {};Unerwartetes Kopierziel {};예상 밖의 복사 대상
 Archive has no unique TRN~;Archiv ohne eindeutige TRN~;아카이브에 고유한 TRN~ 이 없습니다;umgebung.py
 Carrier has no layer {};Träger ohne Layer {};캐리어에 레이어 {}이(가) 없습니다;umgebung.py
 Catalogue has no carrier, model {} only exists in the carrier;Katalog ohne Träger, Modell {} nur im Träger;카탈로그에 캐리어가 없습니다. 모델 {}은(는) 캐리어에만 있습니다;umgebung.py
+Collision box of object {} overlaps {} (cars hit it);Kollisionsbox von Objekt {} überdeckt {} (Autos prallen dagegen);오브젝트 {}의 충돌 상자가 {}와(과) 겹칩니다 (차량이 부딪힘);umgebung.py
 Duplicate ID {};ID {} doppelt;중복 ID {};umgebung.py
 Duplicate object ID {};Objekt-ID {} doppelt;오브젝트 ID {}이(가) 중복됩니다;umgebung.py
 Environment file must be in the project folder: {};Umgebungsdatei muss im Projektordner liegen: {};환경 파일은 프로젝트 폴더 안에 있어야 합니다: {};umgebung.py
@@ -502,11 +532,13 @@ Object {} stands {};Objekt {} steht {};오브젝트 {}이(가) {}에 있습니�
 Object {}: boden must be one of {} ({});Objekt {}: boden muss {} sein ({});오브젝트 {}: boden은 {} 중 하나여야 합니다 ({});umgebung.py
 Object {}: field {} must be a finite number ({});Objekt {}: Feld {} muss eine endliche Zahl sein ({});오브젝트 {}: 칸 {}은(는) 유한한 숫자여야 합니다 ({});umgebung.py
 Object {}: id is missing or empty;Objekt {}: id fehlt oder ist leer;오브젝트 {}: id가 없거나 비어 있습니다;umgebung.py
+Object {}: kollision must be one of {} ({});Objekt {}: kollision muss eines von {} sein ({});오브젝트 {}: kollision 은 {} 중 하나여야 합니다 ({});umgebung.py
 Object {}: model must be a base ID eaid://… without extension ({});Objekt {}: modell muss eine Basis-Kennung eaid://… ohne Endung sein ({});오브젝트 {}: 모델은 확장자 없는 기본 ID eaid://… 여야 합니다 ({});umgebung.py
 Object {}: model {} not in the catalogue;Objekt {}: Modell {} nicht im Katalog;오브젝트 {}: 모델 {}이(가) 카탈로그에 없습니다;umgebung.py
 Object {}: object ({}) expected;Objekt {}: Objekt ({}) erwartet;오브젝트 {}: 객체 ({})가 필요합니다;umgebung.py
 Object {}: own model {} is missing or faulty in the project ({});Objekt {}: eigenes Modell {} fehlt im Projekt oder ist fehlerhaft ({});;umgebung.py
 Object {}: scale {} outside {}–{};Objekt {}: skala {} außerhalb {}–{};오브젝트 {}: 배율 {}이(가) {}–{} 밖입니다;umgebung.py
+Object {}: ueber_fahrbahn must be true/false ({});Objekt {}: ueber_fahrbahn muss true/false sein ({});객체 {}: ueber_fahrbahn은 true/false여야 합니다 ({});umgebung.py
 Outer terrain (TerrainRes *outer_terrain*) is missing in the carrier;Außenterrain (TerrainRes *outer_terrain*) fehlt im Träger;캐리어에 바깥 지형 (TerrainRes *outer_terrain*) 이 없습니다;umgebung.py
 Own model could not be converted: {};Eigenes Modell ließ sich nicht umsetzen: {};;umgebung.py
 Own model {}{}: identifier already exists in the carrier: {};Eigenes Modell {}{}: Kennung gibt es im Träger schon: {};;umgebung.py
@@ -528,8 +560,19 @@ vorderseiten: key must be a model ID eaid://… ({});vorderseiten: Schlüssel mu
 {} m beside a wall;{} m neben einer Mauer;벽에서 {} m 옆;umgebung.py
 {} {}: hoehe_m {} outside {}…{};{} {}: hoehe_m {} außerhalb {}…{};{} {}: hoehe_m {}이(가) {}…{} 밖입니다;umgebung.py
 {} {}: radius_m {} outside {}…{};{} {}: radius_m {} außerhalb {}…{};{} {}: radius_m {}이(가) {}…{} 밖입니다;umgebung.py
+Animations are ignored;Animationen werden ignoriert;;unbenutzt
 Carrier contains no Portimão terrain or no TRN~;Träger enthält kein Portimão-Terrain bzw. keine TRN~;캐리어에 포르티망 지형 또는 TRN~ 이 없습니다;unbenutzt
+Image {}×{} resized to {}×{} (powers of two, at most {});Bild {}×{} auf {}×{} umgerechnet (Zweierpotenzen, höchstens {});;unbenutzt
+Material {}: KHR_texture_transform is ignored;Material {}: KHR_texture_transform wird ignoriert;;unbenutzt
+Material {}: texture uses UV set {}, the game material uses UV0;Material {}: Textur nutzt UV-Satz {}, das Spielmaterial nimmt UV0;;unbenutzt
+Morph target animation is ignored;Animation von Morph-Zielen wird ignoriert;;unbenutzt
+Morph targets are ignored;Morph-Ziele werden ignoriert;;unbenutzt
+OBJ: materials by name only (the MTL file is not read);OBJ: Materialien nur dem Namen nach (die MTL-Datei wird nicht gelesen);;unbenutzt
 on {};auf {};{}에서;unbenutzt
+Only the first animation ({}) is used, {} more are ignored;Nur die erste Animation ({}) wird verwendet, {} weitere werden ignoriert;;unbenutzt
+Primitive without a triangle list left out (mode {});Primitive ohne Dreiecksliste ausgelassen (mode {});;unbenutzt
+Skinning is ignored (static objects only);Skinning wird ignoriert (nur statische Objekte);;unbenutzt
+{} PVS cells with a 60 m corridor (originals at most {}): build with a smaller --pvs-korridor;{} PVS-Zellen bei 60-m-Korridor (Originale höchstens {}) – Bau mit kleinerem --pvs-korridor;60 m 복도의 PVS 셀 {}개 (오리지널 최대 {}): 더 작은 --pvs-korridor 로 빌드하세요;unbenutzt
 Length {} m outside {}–{} m.;Länge {} m außerhalb {}–{} m.;길이 {} m이(가) {}–{} m 밖입니다.;vorschlag.py
 Minimum radius {} m outside {}–{} m.;Mindestradius {} m außerhalb {}–{} m.;최소 반경 {} m이(가) {}–{} m 밖입니다.;vorschlag.py
 No valid track after {} attempts (reasons: {}). Reduce the minimum radius or change the length or number of corners.;Nach {} Versuchen keine gültige Strecke (Gründe: {}). Mindestradius verkleinern oder Länge/Kurvenzahl ändern.;시도 {}번 뒤에 유효한 트랙이 없습니다 (이유: {}). 최소 반경을 줄이거나 길이나 코너 수를 바꾸세요.;vorschlag.py
@@ -550,21 +593,12 @@ x_mode.zonen[{}].partial_versatz_m must be ≥ 0 (empty = no partial);x_mode.zon
 {}.zonen must be a list;{}.zonen muss eine Liste sein;{}.zonen 은 목록이어야 합니다;zonen.py
 {}.zonen[{}] must be an object;{}.zonen[{}] muss ein Objekt sein;{}.zonen[{}] 은 객체여야 합니다;zonen.py
 {}.zonen[{}].{} is missing or not a number;{}.zonen[{}].{} fehlt oder ist keine Zahl;{}.zonen[{}].{} 이(가) 없거나 숫자가 아닙니다;zonen.py
-Collision box of object {} overlaps {} (cars hit it);Kollisionsbox von Objekt {} überdeckt {} (Autos prallen dagegen);오브젝트 {}의 충돌 상자가 {}와(과) 겹칩니다 (차량이 부딪힘);umgebung.py
-Model {}: collision must be keine or quader ({});Modell {}: Kollision muss keine oder quader sein ({});모델 {}: 충돌은 keine 또는 quader 여야 합니다 ({});eigene_modelle.py
-Object {}: collision only works for own models (game model {} keeps none);Objekt {}: Kollision gibt es nur für eigene Modelle (Spielmodell {} bleibt ohne);오브젝트 {}: 충돌은 자체 모델에서만 작동합니다 (게임 모델 {}은(는) 충돌 없음);kollision.py
-Object {}: kollision must be one of {} ({});Objekt {}: kollision muss eines von {} sein ({});오브젝트 {}: kollision 은 {} 중 하나여야 합니다 ({});umgebung.py
-Game folder required for track surface {} (Tools → Set F1 25 game folder);Spielordner nötig für Fahrbahnoberfläche {} (Werkzeuge → F1-25-Spielordner festlegen);트랙 표면 {}에 게임 폴더가 필요합니다 (도구 → F1 25 게임 폴더 설정);asphalt_vorlagen.py
-Game folder required for tyre marks {};Spielordner nötig für Reifenspuren {};타이어 마크 {}에 게임 폴더가 필요합니다;asphalt_vorlagen.py
-No track ERP for {} in the game folder;Keine Strecken-ERP für {} im Spielordner;게임 폴더에 {}의 트랙 ERP가 없습니다;asphalt_vorlagen.py
-Not an F1 25 game folder: {};Kein F1-25-Spielordner: {};F1 25 게임 폴더가 아닙니다: {};asphalt_vorlagen.py
-Skid texture missing for {}: {};Reifenspurtextur fehlt für {}: {};{}의 타이어 마크 텍스처가 없습니다: {};asphalt_vorlagen.py
-Template {} has no skid texture;Vorlage {} hat keine Reifenspurtextur;템플릿 {}에 타이어 마크 텍스처가 없습니다;asphalt_vorlagen.py
-Template {} has no texture slots;Vorlage {} hat keine Texturplätze;템플릿 {}에 텍스처 슬롯이 없습니다;asphalt_vorlagen.py
-Textures missing after copying for {}: {};Texturen fehlen nach dem Kopieren für {}: {};{} 복사 후 텍스처가 없습니다: {};asphalt_vorlagen.py
-Textures missing in the game data for {}: {};Texturen fehlen in den Spieldaten für {}: {};{}의 게임 데이터에 텍스처가 없습니다: {};asphalt_vorlagen.py
-Unknown template {} (not in {});Vorlage {} unbekannt (nicht in {});알 수 없는 템플릿 {} ({}에 없음);asphalt_vorlagen.py
-por_track_a has none of the slots {};por_track_a hat keinen der Plätze {};por_track_a에 슬롯 {} 중 어느 것도 없습니다;asphalt_vorlagen.py
-{} has no slot {};{} hat keinen Platz {};{}에 슬롯 {}이(가) 없습니다;asphalt_vorlagen.py
-{} missing in the carrier;{} fehlt im Träger;캐리어에 {}이(가) 없습니다;asphalt_vorlagen.py
-Track surface/tyre marks need the F1 25 game folder (Tools → Set F1 25 game folder);Fahrbahnoberfläche/Reifenspuren brauchen den F1-25-Spielordner (Werkzeuge → F1-25-Spielordner festlegen);트랙 표면/타이어 마크에는 F1 25 게임 폴더가 필요합니다 (도구 → F1 25 게임 폴더 설정);pruefregeln.py
+Sausage kerbs: {} pieces left out (no room before the barrier);Wulstrandsteine: {} Stücke weggelassen (kein Platz vor der Barriere);소시지 연석: 조각 {}개 생략 (배리어 앞에 공간 없음);querprofil.py
+{} points of sausage kerbs lie within {} m of the racing line (first at x {}, z {}): cars that use the edge of the track hit them. Move them further out or add a kerb in front;{} Punkte von Wulstrandsteinen liegen näher als {} m an der Ideallinie (zuerst bei x {}, z {}): Autos, die den Fahrbahnrand nutzen, treffen sie. Weiter nach außen setzen oder einen Randstein davor legen;소시지 연석의 점 {}개가 레이싱 라인에서 {} m 이내에 있습니다 (처음 x {}, z {}): 트랙 가장자리를 쓰는 차가 부딪힙니다. 더 바깥으로 옮기거나 앞에 연석을 두세요;pruefregeln.py
+{}.{} must be between {} and {} m;{}.{} muss zwischen {} und {} m liegen;{}.{}은(는) {}에서 {} m 사이여야 합니다;definition.py
+Game folder required for artificial grass (Tools → Set F1 25 game folder);Spielordner nötig für Kunstrasen (Werkzeuge → F1-25-Spielordner festlegen);인조 잔디에 게임 폴더가 필요합니다 (도구 → F1 25 게임 폴더 설정);asphalt_vorlagen.py
+No artificial grass material in {};Kein Kunstrasen-Material in {};{}에 인조 잔디 재질이 없습니다;asphalt_vorlagen.py
+Textures missing in the game data for artificial grass: {};Texturen für Kunstrasen fehlen in den Spieldaten: {};인조 잔디 텍스처가 게임 데이터에 없습니다: {};asphalt_vorlagen.py
+{} and {} share no texture slots;{} und {} haben keine gemeinsamen Textur-Slots;{}와 {}에 공통 텍스처 슬롯이 없습니다;asphalt_vorlagen.py
+{}.auslauf must be gras, kies, asphalt or kunstrasen;{}.auslauf muss gras, kies, asphalt oder kunstrasen sein;{}.auslauf는 gras, kies, asphalt 또는 kunstrasen이어야 합니다;definition.py
+game folder missing;Spielordner fehlt;게임 폴더 없음;ansicht_assets.py

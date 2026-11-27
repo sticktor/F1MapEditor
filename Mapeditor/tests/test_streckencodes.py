@@ -237,3 +237,83 @@ def test_flagge_option_und_dialog(window, tmp_path):
     dialog.flag_clear.click()
     assert dialog.options()["flagge"] == "" and dialog.flag_file() is None
 
+
+
+def test_launcher_ablauf_im_hintergrund(window, tmp_path, monkeypatch):
+    """27.11.2026: „addons list“ läuft als Hintergrundschritt (fror das Fenster ein), der Dialog ist währenddessen
+    beschäftigt (kein zweiter Bau, Abbrechen bei der Installation), das Spiel zeigt einen verständlichen Text."""
+    import zipfile
+    from mapeditor import build as build_modul
+    from mapeditor.build import BuildDialog
+    addon = tmp_path / "mapeditor_longer.zip"
+    with zipfile.ZipFile(addon, "w") as z:
+        z.writestr("swofty.json", json.dumps({"id": "mapeditor.longer",
+                                              "requires": [{"id": "mapeditor.traeger_1234abcd"}]}))
+    programm = tmp_path / "swofty.exe"
+    programm.write_bytes(b"")
+    gestartet = []
+
+    class Signal:
+        def __init__(self):
+            self.ziele = []
+
+        def connect(self, f):
+            self.ziele.append(f)
+
+        def emit(self, *a):
+            for f in self.ziele:
+                f(*a)
+
+    class FakeJob:
+        def __init__(self, parent=None):
+            self.output, self.done = Signal(), Signal()
+
+        def start(self, befehl):
+            gestartet.append(befehl)
+
+        def cancel(self):
+            self.done.emit(-2, "")
+
+        def deleteLater(self):
+            pass
+
+    monkeypatch.setattr(build_modul, "ProcessJob", FakeJob)
+    dialog = BuildDialog(window)
+    dialog.target.setCurrentIndex(dialog.target.findData("swofty"))
+    monkeypatch.setattr(dialog, "launcher_program", lambda: programm)
+    dialog.set_inject_target({"paket": str(addon), "optionen": {"ziel": "swofty"}})
+    dialog.launcher_start(True)
+    assert gestartet[-1] == [str(programm), "addons", "list"]           # nicht blockierend, eigener Schritt
+    assert "add-ons" in dialog.phase.text() or "Addons" in dialog.phase.text()
+    assert not dialog.start_button.isEnabled() and not dialog.play_button.isEnabled()
+    # Liste zurück: Träger schon installiert → einschalten, Strecke installieren
+    dialog.launcher_output.append("mapeditor.traeger_1234abcd 1.0 enabled\n")
+    dialog.launcher_job.output.emit("")
+    dialog.launcher_job.done.emit(0, "")
+    assert gestartet[-1] == [str(programm), "addons", "enable", "mapeditor.traeger_1234abcd"]
+    assert dialog.cancel_button.isEnabled() and not dialog.cancel_button.isHidden()
+    for _ in range(2):                                                    # install + enable der Strecke
+        dialog.launcher_job.done.emit(0, "")
+    assert gestartet[-1][1:] == ["addons", "enable", "mapeditor.longer"]
+    dialog.launcher_job.done.emit(0, "")
+    assert gestartet[-1][1:] == ["run", "--apply"] and not dialog.cancel_button.isEnabled()
+    assert "quit the game" in dialog.phase.text() or "Beenden" in dialog.phase.text()
+    assert not dialog.start_button.isEnabled()
+    dialog.launcher_job.done.emit(0, "")
+    assert gestartet[-1][1:] == ["logs"]
+    dialog.launcher_output.append("[info] game exited with code 0 after 10.0s (quit)\n")
+    dialog.launcher_job.done.emit(0, "")
+    assert dialog.launcher_job is None and dialog.start_button.isEnabled() and dialog.play_button.isEnabled()
+    # Abbrechen während der Installation
+    dialog.launcher_start(False)
+    dialog.launcher_job.done.emit(0, "")                                  # Liste leer → Träger fehlt als Datei
+    assert dialog.launcher_job is None and "mapeditor_traeger_1234abcd" in dialog.phase.text()
+    (tmp_path / "mapeditor_traeger_1234abcd.zip").write_bytes(b"")
+    with zipfile.ZipFile(tmp_path / "mapeditor_traeger_1234abcd.zip", "w") as z:
+        z.writestr("swofty.json", json.dumps({"id": "mapeditor.traeger_1234abcd"}))
+    dialog.launcher_start(False)
+    dialog.launcher_job.done.emit(0, "")
+    assert gestartet[-1][1:3] == ["addons", "install"]
+    dialog.cancel_build()
+    assert dialog.launcher_job is None and dialog.launcher_steps == [] and dialog.start_button.isEnabled()
+    dialog.close()

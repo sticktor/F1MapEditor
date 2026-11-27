@@ -315,6 +315,8 @@ class Document(QObject):
             for o in env["objekte"]:
                 if o["id"] in kennungen:
                     o.update(felder)
+                    if o.get("ueber_fahrbahn") is False:      # Standard nicht speichern
+                        o.pop("ueber_fahrbahn")
         self.edit_env(tr("Change environment object") if len(kennungen) == 1 else tr("Change environment objects"), operation)
 
     def env_rotate(self, drehungen, text=None):

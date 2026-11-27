@@ -30,8 +30,13 @@ FARBEN = {  # nur für OBJ-Material und Vorschau
     "asphalt": (0.33, 0.33, 0.35), "randstein": (0.85, 0.15, 0.15), "gras": (0.35, 0.6, 0.3),
     "kies": (0.82, 0.74, 0.55), "mauer": (0.75, 0.75, 0.75), "boxengasse": (0.45, 0.45, 0.47),
     "linie": (0.95, 0.95, 0.95), "auslauf": (0.40, 0.40, 0.43), "startbox": (0.97, 0.97, 0.97),
-    "gebaeude": (0.62, 0.62, 0.66),
+    "gebaeude": (0.62, 0.62, 0.66), "wulst": (0.95, 0.80, 0.10), "randstein_anfang": (0.92, 0.92, 0.92),
+    "randstein_ende": (0.92, 0.92, 0.92), "randstein_tief": (0.60, 0.15, 0.15), "kunstrasen": (0.25, 0.70, 0.30),
 }
+#: Wulstrandsteine: Punkte quer über das Profil, Längsschritt, Abstand über dem Boden (kein Z-Fighting)
+WULST_QUER = 9
+WULST_SCHRITT_M = 0.4
+WULST_UEBER_BODEN_M = 0.01
 
 #: Startboxen liegen so weit über dem Asphalt (eigene Klasse, nur sichtbar; kein Z-Fighting)
 STARTBOX_HOEHE_M = 0.015
@@ -154,6 +159,10 @@ def netz_erzeugen(ml, qp, param):
         return p
 
     for j in range(13):
+        if j in (2, 10) and prof["links"].get("teile") is not None:
+            _randstein_band(netz, ml, st, prof["rechts" if j == 2 else "links"], 1.0 if j == 10 else -1.0,
+                            wr if j == 2 else wl, s_geo, tl, tk, oben)
+            continue
         A, B = punkte(D[:, j]), punkte(D[:, j + 1])
         o = baender[j][:-1].astype(np.int16).copy()
         if 5 <= j <= 7:
@@ -190,6 +199,9 @@ def netz_erzeugen(ml, qp, param):
     pbox_ = param["boxengasse"]
     if pbox_.get("aktiv") and qp.box is not None:
         _boxengasse_ausstattung(netz, ml, qp, pbox_, oben, tl)
+
+    # ---- Wulstrandsteine (Sausage Kerbs): gerundete Stücke über dem Grünstreifen hinter dem Randstein
+    _wulst_netz(netz, ml, qp, param, tl, oben)
 
     # ---- Barrieren
     pb = param["barriere"]
@@ -241,6 +253,73 @@ def netz_erzeugen(ml, qp, param):
                               np.zeros((2, 2)), np.ones((2, 2)) * 0.1,
                               np.array([OBERFLAECHE["mauer"]], np.int16), richt[None, :])
     return netz.fertig()
+
+
+#: Querprofil des Randsteins (Anteile der Randsteinbreite) und Höhenfaktoren: Kante 0, nach 20 % volle Profilhöhe,
+#: ab 80 % wieder abfallend; abgesenkter Teil: nach 10 % volle Tiefe, ab 90 % wieder hoch
+RANDSTEIN_PROFIL = ((0.0, 0.0), (0.2, 1.0), (0.8, 1.0), (1.0, 0.0))
+TIEF_PROFIL = ((0.0, 0.0), (0.1, -1.0), (0.9, -1.0), (1.0, 0.0))
+
+
+def _randstein_band(netz, ml, st, prof, vz, rand, s_geo, tl, tk, oben):
+    """Randsteinband in Teilstreifen (25.11.2026, docs/kerbtypen.md): Randstein mit Profil (Klasse je Station:
+    Anfangs-/Mittel-/Endstück), dahinter der abgesenkte Randstein (``randstein_tief``). Ohne Profil, ohne abgesenkten
+    Teil entstehen dieselbe Fläche und dieselben UV wie bisher (Teilstreifen ohne Breite entfallen als entartet).
+    UV des Randsteins: u = Abstand vom Fahrbahnrand / Texturlänge (wie bisher), v = s / Randstein-Texturlänge;
+    abgesenkter Teil: u = Anteil seiner Breite (0…1)."""
+    e2 = prof["e"][:, 2]
+    k, tb, h, tt = (prof["teile"][:, i] for i in range(4))
+    # Höhe und Tiefe laufen mit der Breite aus (bis 0,3 m Breite anteilig): keine senkrechten Wände, wo ein Teil endet
+    h = h * np.clip(k / 0.3, 0.0, 1.0)
+    tt = tt * np.clip(tb / 0.3, 0.0, 1.0)
+    v = s_geo / tk
+    o_rs = prof["rs_klasse"][:-1].astype(np.int16)
+    o_tief = np.full(len(s_geo) - 1, OBERFLAECHE["randstein_tief"], np.int16)
+
+    def linie(rel, dy):
+        d = vz * (rand + rel)
+        p = st.punkt(d)
+        p[:, 1] = ml.hoehe_quer(st, d) + dy
+        return p
+    for (a, ha), (b, hb) in zip(RANDSTEIN_PROFIL, RANDSTEIN_PROFIL[1:]):
+        ra, rb = e2 + a * k, e2 + b * k
+        netz.streifen(linie(ra, ha * h), linie(rb, hb * h), np.column_stack([ra / tl, v]), np.column_stack([rb / tl, v]),
+                      o_rs, oben)
+    for (a, ha), (b, hb) in zip(TIEF_PROFIL, TIEF_PROFIL[1:]):
+        ra, rb = e2 + k + a * tb, e2 + k + b * tb
+        netz.streifen(linie(ra, ha * tt), linie(rb, hb * tt), np.column_stack([np.full(len(v), a), v]),
+                      np.column_stack([np.full(len(v), b), v]), o_tief, oben)
+
+
+def _wulst_netz(netz, ml, qp, param, tl, oben):
+    """Je Stück ein Streifen je Profilschritt quer; UV u = Anteil der Breite (0…1), v = s / Texturlänge (Muster läuft
+    über die Stücke weiter). Die Höhe läuft an den Enden über ``rampe_m`` an (keine senkrechten Stirnflächen)."""
+    from .querprofil import wulst_profil
+    rampe = max(float((param.get("wulst") or {}).get("rampe_m", 0.4)), 0.05)
+    o_w = OBERFLAECHE["wulst"]
+    t = np.linspace(0.0, 1.0, WULST_QUER)
+    for w in getattr(qp, "wulst", None) or []:
+        laenge = w["s1"] - w["s0"]
+        k = max(3, int(np.ceil(laenge / WULST_SCHRITT_M)) + 1)
+        ss = np.linspace(w["s0"], w["s1"], k)
+        sub = ml.stationen(ss)
+        vz = 1.0 if w["seite"] == "links" else -1.0
+        rand = sub.wl if vz > 0 else sub.wr
+        an = (ss - w["s0"]) / rampe if w.get("rampe_anfang", True) else np.full(k, 1.0)
+        ab = (w["s1"] - ss) / rampe if w.get("rampe_ende", True) else np.full(k, 1.0)
+        ende = np.clip(np.minimum(an, ab), 0.0, 1.0)
+        ende = ende * ende * (3 - 2 * ende)
+        linien = []
+        for tj in t:
+            d = vz * (rand + w["innen_m"] + tj * w["breite_m"])
+            p = sub.punkt(d)
+            p[:, 1] = ml.hoehe_quer(sub, d) + WULST_UEBER_BODEN_M + float(wulst_profil(tj, w["hoehe_m"])) * ende
+            linien.append(p)
+        v = ss / tl
+        o = np.full(k - 1, o_w, np.int16)
+        for j in range(len(t) - 1):
+            netz.streifen(linien[j], linien[j + 1], np.column_stack([np.full(k, t[j]), v]),
+                          np.column_stack([np.full(k, t[j + 1]), v]), o, oben)
 
 
 def _boxengasse_ausstattung(netz, ml, qp, pbox, oben, tl):

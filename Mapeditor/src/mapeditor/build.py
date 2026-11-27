@@ -12,15 +12,15 @@ import uuid
 import zipfile
 
 from PySide6.QtCore import QElapsedTimer, QEvent, Qt, QTimer, QUrl
-from PySide6.QtGui import QBrush, QColor, QDesktopServices, QPainter, QPixmap
+from PySide6.QtGui import QBrush, QColor, QDesktopServices, QImage, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QComboBox, QDialog, QFrame, QGridLayout, QScrollArea, QSizePolicy, QFileDialog, QFormLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
-    QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QTableWidget, QTableWidgetItem,
-    QVBoxLayout, QWidget,
+    QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QSpinBox, QTableWidget,
+    QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from .adapter import (BUILD_PVS, TRACK_CODES, BuildJob, ProcessJob, build_command, swofty_auswerten,
-                      swofty_installieren, swofty_installierte, swofty_programm, swofty_traeger_ids, swofty_traeger_plan, swofty_starten, check_key, default_carrier,
+                      swofty_ids_aus_liste, swofty_installieren, swofty_liste_befehl, swofty_programm, swofty_traeger_ids, swofty_traeger_plan, swofty_starten, check_key, default_carrier,
                       game_status_command, injector_command, parse_game_status, toolkit_path, worker_command)
 from .i18n import N_, meldung, tr, trn
 from .paths import writable_path
@@ -410,6 +410,18 @@ class BuildDialog(QDialog):
         self.pvs.addItem(tr("along the track (recommended)"), "strecke")
         self.pvs.addItem(tr("Original cells see everything"), "alles")
         self.pvs.setCurrentIndex(max(0, self.pvs.findData(settings.get("pvs_variante", "strecke"))))
+        self.pvs_corridor = QSpinBox()
+        self.pvs_corridor.setRange(0, 120)
+        self.pvs_corridor.setSingleStep(5)
+        self.pvs_corridor.setSuffix(" m")
+        self.pvs_corridor.setSpecialValueText(tr("Automatic"))
+        self.pvs_corridor.setValue(int(settings.get("pvs_korridor") or 0))
+        self.pvs_corridor.setToolTip(tr("Width of the visibility corridor on each side of the track (only carriers with "
+                                        "visibility data). Automatic: 60 m, narrower in 5 m steps down to 30 m if the "
+                                        "track would get more cells than any original track (otherwise the game can "
+                                        "crash while loading)."))
+        self.pvs.currentIndexChanged.connect(lambda _i: self.pvs_corridor.setEnabled(self.pvs.currentData() == "strecke"))
+        self.pvs_corridor.setEnabled(self.pvs.currentData() == "strecke")
         self.world_maps = QCheckBox(tr("Own ground and surroundings maps"))
         self.world_maps.setToolTip(tr("Replaces Portimão's aerial photos: ground from the track surfaces, racing line "
                                       "on the asphalt, surroundings matching hills and mountains."))
@@ -431,6 +443,7 @@ class BuildDialog(QDialog):
         self.track_name_label = QLabel(tr("Track name"))
         advanced.addRow(self.track_name_label, self.track_name)
         advanced.addRow(tr("Visibility (PVS)"), self.pvs)
+        advanced.addRow(tr("Visibility corridor"), self.pvs_corridor)
         advanced.addRow("", self.world_maps)
         advanced.addRow(tr("Landscape"), self.biome)
         advanced.addRow(tr("Colour tone"), self.tint)
@@ -449,9 +462,18 @@ class BuildDialog(QDialog):
         asphalt_layout.setAlignment(Qt.AlignTop)
         asphalt_layout.addWidget(self.asphalt, 1, Qt.AlignTop)
         asphalt_layout.addWidget(self.asphalt_preview, 0, Qt.AlignTop)
+        self.asphalt_tone = QCheckBox(tr("Keep the template's colour tone"))
+        self.asphalt_tone.setToolTip(tr(
+            "Off (recommended): only the brightness of the template's base and dust colour is used, the colour itself "
+            "stays neutral. The colour belongs to the ground maps of the template circuit and otherwise tints the "
+            "asphalt edges (Silverstone: olive green). On: keep the colour as in the game. The preview shows the "
+            "difference."))
+        self.asphalt_tone.setChecked(settings.get("asphalt_farbton") == "vorlage")
         self._fill_asphalt(settings.get("asphalt_vorlage", "traeger"))
         self.asphalt.currentIndexChanged.connect(self._asphalt_preview)
+        self.asphalt_tone.toggled.connect(self._asphalt_preview)
         advanced.addRow(tr("Track surface"), asphalt_row)
+        advanced.addRow("", self.asphalt_tone)
         self.skid = QComboBox()
         self.skid.setToolTip(tr("Replaces the dark tyre marks along the track (copied from the game at build time). "
                                 "Carrier leaves Portimão unchanged. Needs the F1 25 game folder."))
@@ -907,9 +929,11 @@ class BuildDialog(QDialog):
                 "streckencode": self.code.currentData(),
                 "renndaten": self.race_data.isChecked(), "raster": self.grid_size.currentData(),
                 "streckenname": self.track_name.text().strip(),
-                "pvs_variante": self.pvs.currentData(), "weltkarten": self.world_maps.isChecked(),
+                "pvs_variante": self.pvs.currentData(), "pvs_korridor": self.pvs_corridor.value(),
+                "weltkarten": self.world_maps.isChecked(),
                 "biom": self.biome.currentData(), "farbton": self.tint.currentData(),
                 "asphalt_vorlage": self.asphalt.currentData() or "traeger",
+                "asphalt_farbton": "vorlage" if self.asphalt_tone.isChecked() else "neutral",
                 "skid_vorlage": self.skid.currentData() or "traeger"}
 
     def _fahrbahn_katalog(self):
@@ -927,8 +951,8 @@ class BuildDialog(QDialog):
         ]
         return [p for p in kandidaten if p.is_dir()]
 
-    def _fahrbahn_vorschau_setzen(self, label, eintrag, art, schluessel=None):
-        """160×160-Vorschau aus PNG; fehlt die Datei → Gedankenstrich."""
+    def _fahrbahn_vorschau_setzen(self, label, eintrag, art, schluessel=None, farbe=None):
+        """160×160-Vorschau aus PNG; fehlt die Datei → Gedankenstrich. ``farbe``: RGB-Faktoren für den Farbton."""
         name = (eintrag or {}).get("vorschau") or ((schluessel or "") + ".png")
         datei = None
         for ordner in self._fahrbahn_vorschau_ordner(art):
@@ -937,7 +961,8 @@ class BuildDialog(QDialog):
                 datei = kandidat
                 break
         if datei is not None:
-            label.setPixmap(QPixmap(str(datei)).scaled(
+            pixmap = QPixmap(str(datei)) if farbe is None else self._getoent(datei, farbe)
+            label.setPixmap(pixmap.scaled(
                 160, 160, Qt.KeepAspectRatio, Qt.SmoothTransformation))
             label.setText("")
         else:
@@ -981,10 +1006,32 @@ class BuildDialog(QDialog):
             return next((e for e in self._asphalt_katalog.values() if e.get("traeger")), {})
         return {}
 
+    @staticmethod
+    def _getoent(datei, farbe):
+        """Vorschau mit dem Farbton der Vorlage: RGB je Kanal mal ``farbe`` (Mittel 1, Helligkeit bleibt)."""
+        import numpy as np
+        bild = QImage(str(datei)).convertToFormat(QImage.Format_RGBA8888)
+        w, h = bild.width(), bild.height()
+        roh = np.frombuffer(bild.constBits(), np.uint8).reshape(h, bild.bytesPerLine())[:, :w * 4].reshape(h, w, 4)
+        neu = roh.astype(np.float32)
+        neu[..., :3] *= np.asarray(farbe, np.float32)
+        daten = np.ascontiguousarray(np.clip(neu, 0, 255).astype(np.uint8))
+        return QPixmap.fromImage(QImage(daten.data, w, h, w * 4, QImage.Format_RGBA8888).copy())
+
     def _asphalt_preview(self, *_args):
-        """Albedo-Vorschau der gewählten Oberfläche."""
+        """Albedo-Vorschau der gewählten Oberfläche; mit „Farbton behalten“ im Grundton der Vorlage (20.11.2026)."""
+        eintrag = self._asphalt_eintrag()
+        vorlage = (self.asphalt.currentData() or "traeger") != "traeger"
+        tone = getattr(self, "asphalt_tone", None)
+        if tone is not None:
+            tone.setEnabled(vorlage)
+        farbe = None
+        ton = eintrag.get("grundton")
+        if vorlage and tone is not None and tone.isChecked() and ton and len(ton) == 3 and sum(ton) > 0:
+            mittel = sum(ton) / 3.0
+            farbe = [v / mittel for v in ton]
         self._fahrbahn_vorschau_setzen(
-            self.asphalt_preview, self._asphalt_eintrag(), "asphalt", self.asphalt.currentData())
+            self.asphalt_preview, eintrag, "asphalt", self.asphalt.currentData(), farbe)
 
     def _fill_skid(self, gewählt):
         """Reifenspuren wie skid_vergleich/목록.txt (gleiche Streifen zusammengefasst)."""
@@ -1430,24 +1477,38 @@ class BuildDialog(QDialog):
 
     def launcher_start(self, play):
         program = self.launcher_program()
-        if program is None or self.launcher_record is None:
+        if program is None or self.launcher_record is None or self.job or self.launcher_job:
             return
         try:
             # Träger aus dem Baubericht oder aus „requires“ des Addons; fehlt er im Launcher, wird er mitinstalliert
             package = self.launcher_record["paket"]
             carrier = next((p.get("traeger") for p in self.launcher_record.get("pakete") or [] if p.get("traeger")), None)
-            installed = swofty_installierte(program) if (carrier or swofty_traeger_ids(package)) else set()
+            needs_list = bool(carrier or swofty_traeger_ids(package))
+        except (OSError, KeyError, ValueError, zipfile.BadZipFile) as error:
+            self.phase.setText(meldung(error))
+            return
+        self.launcher_play = play
+        self._launcher_plan_args = (program, package, carrier, play)
+        if not needs_list:
+            self._launcher_plan(set())
+            return
+        # „addons list“ als eigener Schritt im Hintergrund; danach entsteht der Plan (_launcher_plan)
+        self.launcher_steps, self.launcher_diagnose = [swofty_liste_befehl(program)], []
+        self._launcher_next()
+
+    def _launcher_plan(self, installed):
+        program, package, carrier, play = self._launcher_plan_args
+        try:
             carrier, enable_only = swofty_traeger_plan(package, carrier, installed)
             steps = [[str(program), "addons", "enable", k] for k in enable_only] + \
                 swofty_installieren(program, package, carrier, installed)
         except (OSError, KeyError, ValueError, zipfile.BadZipFile) as error:
+            self.launcher_steps, self.launcher_diagnose = [], []
             self.phase.setText(meldung(error))
+            self.busy(self.job is not None)
             return
         self.launcher_steps = steps + (swofty_starten(program) if play else [])
-        self.launcher_play = play
         self.launcher_diagnose = [swofty_auswerten(program)] if play else []
-        self.install_button.setEnabled(False)
-        self.play_button.setEnabled(False)
         self._launcher_next()
 
     def launcher_diagnosis(self):
@@ -1457,30 +1518,58 @@ class BuildDialog(QDialog):
         self.launcher_steps, self.launcher_play, self.launcher_diagnose = [], False, [swofty_auswerten(program)]
         self._launcher_next()
 
+    def _launcher_phase(self, step):
+        """Verständlicher Text je Schritt statt „Swofty Launcher: run --apply“ (27.11.2026)."""
+        action = step[1:3]
+        if action == ["addons", "list"]:
+            return tr("Swofty Launcher: checking installed add-ons …")
+        if action == ["addons", "install"]:
+            return tr("Swofty Launcher: installing {name} …", name=Path(step[3]).name)
+        if action == ["addons", "enable"]:
+            return tr("Swofty Launcher: enabling {name} …", name=step[3])
+        if step[1:2] == ["run"]:
+            return tr("Game running through Swofty Launcher · the session summary follows when you quit the game")
+        if step[1:2] == ["logs"]:
+            return tr("Swofty Launcher: reading the last session …")
+        return tr("Swofty Launcher: {schritt}", schritt=" ".join(step[1:3]))
+
     def _launcher_next(self):
         steps = self.launcher_steps or self.launcher_diagnose
         step = steps.pop(0)
         self.launcher_output = []
-        self.phase.setText(tr("Swofty Launcher: {schritt}", schritt=" ".join(step[1:3])))
         self.log.appendPlainText("$ swofty " + " ".join(step[1:]))
         self.launcher_job = ProcessJob(self)
         self.launcher_job.output.connect(self.log.insertPlainText)
         self.launcher_job.output.connect(self.launcher_output.append)
         self.launcher_job.done.connect(lambda code, text, step=step: self._launcher_done(step, code))
         self.launcher_job.start(step)
+        # Arbeitszustand: kein zweiter Bau, Abbrechen während der Installation; das laufende Spiel bricht der Editor
+        # nicht ab (Abbrechen gesperrt, Schließen blendet den Dialog nur aus)
+        if not getattr(self, "busy_now", False):
+            self.busy(True)
+        self.cancel_button.setEnabled(step[1:2] != ["run"])
+        self._update_buttons()
+        self.phase.setText(self._launcher_phase(step))
 
     def _launcher_done(self, step, code):
         job, self.launcher_job = self.launcher_job, None
         job.deleteLater()
         text = "".join(self.launcher_output)
-        if step[1:2] == ["logs"]:
+        if code == -2:                              # abgebrochen
+            self.launcher_steps, self.launcher_diagnose = [], []
+            self.phase.setText(tr("Swofty Launcher: cancelled · the add-on may be incomplete, install it again"))
+        elif step[1:3] == ["addons", "list"]:
+            self._launcher_plan(swofty_ids_aus_liste(text) if code == 0 else set())
+            return
+        elif step[1:2] == ["logs"]:
             self._launcher_report(text)
         elif code and step[1:2] != ["run"]:      # Installation gescheitert; ein Absturz endet in der Auswertung
             self.launcher_steps, self.launcher_diagnose = [], []
             self.phase.setText(tr("Swofty Launcher: error · {text}", text=text.strip()[-300:]))
         if self.launcher_steps or self.launcher_diagnose:
             self._launcher_next()
-        elif step[1:2] != ["logs"] and not code:
+            return
+        if step[1:2] != ["logs"] and not code:
             self.phase.setText(tr("Installed in the launcher. Start it there or from here."))
         self.busy(self.job is not None)
 
@@ -1580,6 +1669,12 @@ class BuildDialog(QDialog):
             self.main.open_playtests(select=record.get("id"))
 
     def cancel_build(self):
+        if self.launcher_job is not None and self.job is None:
+            self.launcher_steps, self.launcher_diagnose = [], []
+            self.cancel_button.setEnabled(False)
+            self.cancel_button.setText(tr("Cancelling …"))
+            self.launcher_job.cancel()
+            return
         if self.job:
             try:
                 self.job.cancel()
@@ -1623,6 +1718,96 @@ def _tool_error(text, code):
     lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
     error = next((line for line in reversed(lines) if line.startswith("FEHLER")), None)
     return error or (lines[-1] if lines else tr("Exit code {code}", code=code))
+
+
+class SwoftyAddonsDialog(QDialog):
+    """Swofty-Addons verwalten (20.11.2026): Liste mit Größe und Abhängigkeiten, ein-/ausschalten, Mapeditor-Addons
+    entfernen. Ein Träger, den eine verbleibende Strecke braucht, wird nicht entfernt."""
+
+    def __init__(self, programm, parent=None, runner=None):
+        super().__init__(parent)
+        from .adapter import swofty_addon_befehl, swofty_addons
+        self.programm, self._befehl, self._liste = programm, swofty_addon_befehl, swofty_addons
+        self.runner = runner or (lambda cmd: subprocess.run(cmd, capture_output=True, text=True, timeout=600,
+                                                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)))
+        self.setWindowTitle(tr("Swofty add-ons"))
+        self.resize(900, 520)
+        layout = QVBoxLayout(self)
+        self.info = QLabel()
+        self.info.setWordWrap(True)
+        layout.addWidget(self.info)
+        self.table = QTableWidget(0, 6)
+        self.table.setHorizontalHeaderLabels([tr("Add-on"), tr("Name"), tr("State"), tr("Size"), tr("Needs"),
+                                              tr("Needed by")])
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        layout.addWidget(self.table, 1)
+        row = QHBoxLayout()
+        self.enable_button = QPushButton(tr("Enable"))
+        self.disable_button = QPushButton(tr("Disable"))
+        self.remove_button = QPushButton(tr("Remove …"))
+        self.remove_button.setToolTip(tr("Uninstall the selected Mapeditor add-ons from the launcher (the packages in "
+                                         "your package folder stay). Carriers still needed by a track stay."))
+        close = QPushButton(tr("Close"))
+        self.enable_button.clicked.connect(lambda: self._run("enable"))
+        self.disable_button.clicked.connect(lambda: self._run("disable"))
+        self.remove_button.clicked.connect(self._remove)
+        close.clicked.connect(self.accept)
+        for b in (self.enable_button, self.disable_button, self.remove_button):
+            row.addWidget(b)
+        row.addStretch(1)
+        row.addWidget(close)
+        layout.addLayout(row)
+        self.refresh()
+
+    def refresh(self):
+        self.addons = self._liste(self.programm)
+        gebraucht = {}
+        for a in self.addons:
+            for k in a["braucht"]:
+                gebraucht.setdefault(k, []).append(a["id"])
+        self.gebraucht = gebraucht
+        self.table.setRowCount(len(self.addons))
+        for i, a in enumerate(self.addons):
+            werte = [a["id"], a["name"], a["zustand"], zahl(a["gb"], 2) + " GB", ", ".join(a["braucht"]),
+                     ", ".join(gebraucht.get(a["id"], []))]
+            for j, w in enumerate(werte):
+                self.table.setItem(i, j, QTableWidgetItem(w))
+        gesamt = sum(a["gb"] for a in self.addons if a["id"].startswith("mapeditor."))
+        self.info.setText(tr("{anzahl} add-ons installed, Mapeditor add-ons use {gb} GB. Removing only uninstalls "
+                             "them from the launcher; the game folder is not touched.",
+                             anzahl=len(self.addons), gb=zahl(gesamt, 1)) if self.addons else
+                          tr("The launcher did not answer (Swofty Launcher installed? Choose swofty.exe in the build "
+                             "dialog)."))
+
+    def selected(self):
+        zeilen = sorted({i.row() for i in self.table.selectedIndexes()})
+        return [self.addons[z] for z in zeilen if z < len(self.addons)]
+
+    def _run(self, aktion, addons=None):
+        for a in addons if addons is not None else self.selected():
+            if a["zustand"] == "built in":
+                continue
+            self.runner(self._befehl(self.programm, aktion, a["id"]))
+        self.refresh()
+
+    def _remove(self):
+        wahl = [a for a in self.selected() if a["id"].startswith("mapeditor.")]
+        ids = {a["id"] for a in wahl}
+        bleiben = [a for a in wahl if any(n not in ids for n in self.gebraucht.get(a["id"], []))]
+        weg = [a for a in wahl if a not in bleiben]
+        if not weg:
+            self.info.setText(tr("Nothing to remove: only Mapeditor add-ons can be removed here, and carriers that a "
+                                 "remaining track needs stay."))
+            return
+        text = tr("Remove {anzahl} add-ons from the launcher ({gb} GB)?", anzahl=len(weg),
+                  gb=zahl(sum(a["gb"] for a in weg), 1)) + "\n\n" + "\n".join("• " + a["id"] for a in weg)
+        if bleiben:
+            text += "\n\n" + tr("Kept (still needed): {liste}", liste=", ".join(a["id"] for a in bleiben))
+        if QMessageBox.question(self, tr("Swofty add-ons"), text) != QMessageBox.Yes:
+            return
+        self._run("remove", weg)
 
 
 class CleanupDialog(QDialog):

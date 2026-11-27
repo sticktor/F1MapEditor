@@ -6,6 +6,7 @@ import bisect
 import copy
 import hashlib
 import json
+import os
 import math
 import re
 from pathlib import Path
@@ -15,7 +16,8 @@ from PySide6.QtGui import QAction, QActionGroup, QCloseEvent, QKeySequence, QPal
 from PySide6.QtWidgets import (
     QApplication, QAbstractItemView, QComboBox, QDialog, QDockWidget, QFileDialog, QFrame, QHBoxLayout, QHeaderView,
     QInputDialog, QLabel, QListWidget, QListWidgetItem, QMainWindow, QMenuBar, QMessageBox,
-    QPushButton, QScrollArea, QSizePolicy, QSplitter, QStatusBar, QTabWidget, QTableWidget, QTableWidgetItem, QToolBar,
+    QPushButton, QScrollArea, QSizePolicy, QSplitter, QStatusBar, QTabBar, QTabWidget, QTableWidget, QTableWidgetItem,
+    QToolBar,
     QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget, QLineEdit,
 )
 
@@ -30,7 +32,7 @@ from .input_geometry import input_geometry
 from .project import Project, point_xyz, read_json, set_point
 from .views import CrossSection, MapView, ProfileView, SpeedView
 from .paths import writable_path
-from . import ansicht, neigung, querschnitt, umgebung
+from . import ansicht, arbeitsbereiche, neigung, querschnitt, umgebung
 from .neigung import BankPanel
 from .bildvorlage import Nachzeichner, NachzeichnenPanel
 from .livemap import LiveMap
@@ -67,7 +69,9 @@ LABELS = {
     "startboxen": N_("Grid boxes on the asphalt"),
     "spur_versatz_m": N_("Pit line offset towards the track · m"), "spur_halbbreite_m": N_("Pit lane half width · m"),
     "kruemmung_schwelle": N_("Curvature threshold · 1/m"), "vorlauf_m": N_("Lead-in · m"), "nachlauf_m": N_("Run-out · m"),
-    "aussen_nachlauf_m": N_("Outer run-out · m"), "rampe_m": N_("Ramp · m"), "abstand": N_(("Distance from the track "
+    "aussen_nachlauf_m": N_("Outer run-out · m"), "rampe_m": N_("Ramp · m"),
+    "profil_hoehe_m": N_("Kerb height (profile) · m"), "enden": N_("Kerb end pieces (white, rounded)"),
+    "tief_breite_m": N_("Negative kerb width · m"), "tief_m": N_("Negative kerb depth · m"), "abstand": N_(("Distance from the track "
                                                                                              "edge · m")),
     "dicke": N_("Thickness · m"), "mindestabstand": N_("Minimum distance · m"), "luecke_m": N_("Gap · m"),
     "von_s": N_("From input s · m"), "bis_s": N_("To input s · m"), "richtung_grad": N_("Start direction · °"),
@@ -329,6 +333,11 @@ class MainWindow(QMainWindow):
         # Fahrlinienlauf (voller Generator + Prüfung) im Hintergrund; Ergebnis je Definitionsstand zwischengespeichert
         # und von „Prüfen“ und der Vorabprüfung des Baus wiederverwendet.
         self.analysis = None
+        self.netz_3d = None          # Netz der letzten Fahrlinie für die 3D-Ansicht (ansicht3d.netz_datei)
+        self.ansicht_3d = None
+        self.arbeitsbereich = "alles"   # Arbeitsbereich (arbeitsbereiche.py); Tests behalten die alte Aufteilung
+        self.bereich_stand = None
+        self._bereich_wechsel = False
         self.analysis_key = None
         self.analysis_job = None
         self.analysis_job_key = None
@@ -400,6 +409,10 @@ class MainWindow(QMainWindow):
         self._restore_layout()
         self._apply_env_catalog()
         self._refresh_env_panel()
+        if self.bereich_stand is not None:                     # nach dem Sprachwechsel
+            self.set_workspace(self.arbeitsbereich, merken=False)
+        elif self.interactive:
+            self.set_workspace(arbeitsbereiche.aktiv_laden(), merken=False)
 
     def action(self, menu, title, callback, shortcut=None):
         action = QAction(title, self)
@@ -456,6 +469,23 @@ class MainWindow(QMainWindow):
         self.action(edit_menu, tr("Banking: all corners automatically"), lambda: self.auto_bank(self.bank_panel.amount.value() or 4.0))
         self.action(edit_menu, tr("Banking: whole track flat"), self.flatten_bank)
         view_menu = self.menuBar().addMenu(tr("&View"))
+        bereich_menu = view_menu.addMenu(tr("Workspace"))
+        self.bereich_actions = {}
+        bereich_gruppe = QActionGroup(self)
+        bereich_gruppe.setExclusive(True)
+        for nummer, key in enumerate(arbeitsbereiche.SCHLUESSEL, 1):
+            a = QAction(tr(arbeitsbereiche.NAMEN[key]), self)
+            a.setCheckable(True)
+            a.setChecked(key == self.arbeitsbereich)
+            a.setShortcut(QKeySequence(f"Ctrl+{nummer}"))
+            a.setToolTip(tr(arbeitsbereiche.BESCHREIBUNG[key]))
+            a.triggered.connect(lambda _c=False, key=key: self.set_workspace(key))
+            bereich_gruppe.addAction(a)
+            bereich_menu.addAction(a)
+            self.bereich_actions[key] = a
+        bereich_menu.addSeparator()
+        self.action(bereich_menu, tr("Reset this workspace"), self.reset_workspace)
+        view_menu.addSeparator()
         for group in ansicht.GROUPS:
             submenu = view_menu.addMenu(tr(group))
             for key, g, label, tip, _ in ansicht.FEATURES:
@@ -472,6 +502,7 @@ class MainWindow(QMainWindow):
         self.action(view_menu, tr("Customise view …"), self.open_view_dialog, "Ctrl+Shift+A")
         self.action(view_menu, tr("Show everything"), self.show_all_features)
         self.action(view_menu, tr("Maximise / restore lower area"), self.toggle_results_maximized, "Ctrl+M")
+        self.action(view_menu, tr("3D view in its own window …"), self.open_3d_view, "Ctrl+Shift+3")
         view_menu.addSeparator()
         self.language_menu = view_menu.addMenu(tr("Sprache / Language"))
         self.language_actions = {}
@@ -495,8 +526,12 @@ class MainWindow(QMainWindow):
         self.action(tools, tr("Set F1 25 game folder …"), self.choose_game_folder)
         self.action(tools, tr("Playtest log …"), self.open_playtests)
         self.action(tools, tr("Clean up old builds …"), self.open_cleanup)
+        self.action(tools, tr("Swofty add-ons …"), self.open_swofty_addons)
         help_menu = self.menuBar().addMenu(tr("&Help"))
         self.action(help_menu, tr("How to use"), self.show_help, "F1")
+        help_menu.addSeparator()
+        self.action(help_menu, tr("What's new …"), self.show_whats_new)
+        self.action(help_menu, tr("Check for updates …"), self.check_for_updates)
         toolbar = QToolBar(tr("Design"), self)
         toolbar.setMovable(False)
         toolbar.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
@@ -516,7 +551,7 @@ class MainWindow(QMainWindow):
         for name, mode, glyph, tip, key in ((tr("Select"), "auswahl", "auswahl", tr("Select, drag, rotate"), "V"),
                                             (tr("Points"), "punkte", "punkte", tr(("Click into the map sets a control "
                                                                                    "point")), "P"),
-                                            (tr("Environment"), "umgebung", "umgebung",
+                                            (tr("Place"), "umgebung", "umgebung",
                                              tr("Place, select and move trees, buildings … from the catalogue"), "U"),
                                             (tr("Plant"), "streuen", "streuen",
                                              tr("Plant an area (rectangle or brush) with trees and bushes"), "B"),
@@ -533,7 +568,7 @@ class MainWindow(QMainWindow):
             group.addAction(action)
             self.mode_actions[mode] = action
             toolbar.addAction(action)
-        toolbar.addSeparator()
+        self._trenner_runde = toolbar.addSeparator()
         self.close_action = tool(tr("Close lap"), "runde", self.toggle_closed, "")
         toolbar.widgetForAction(self.close_action).setObjectName("runde")
         toolbar.addSeparator()
@@ -827,6 +862,7 @@ class MainWindow(QMainWindow):
         self.env_panel.import_requested.connect(self.import_own_model)
         self.env_panel.remove_model_requested.connect(self.remove_own_model)
         self.env_panel.collision_changed.connect(self.set_own_model_collision)
+        self.env_panel.animation_changed.connect(self.set_own_model_animation)
         self.env_panel.settings_changed.connect(self._env_settings_changed)
         self.env_panel.properties_requested.connect(self._env_properties)
         self.env_panel.ground_cover_toggled.connect(self._env_ground_cover)
@@ -841,14 +877,27 @@ class MainWindow(QMainWindow):
         self.results.currentChanged.connect(self._results_tab_changed)
         self.map.env_place_requested.connect(self._env_place)
         self.map.env_scatter_requested.connect(self._env_scatter)
+        self.env_panel.plant_now_requested.connect(self._env_plant_now)
+        self.env_panel.library_requested.connect(self.open_model_library)
+        self.env_panel.save_to_library_requested.connect(self.save_model_to_library)
+        self.env_panel.row_requested.connect(self._env_row)
         self.map.env_disarm_requested.connect(self.env_panel.disarm)
         self.map.env_face_track_requested.connect(self._env_face_track)
         self.env_panel.face_track_requested.connect(self._env_face_track)
         self.env_panel.front_turn_requested.connect(self._env_front_turn)
         self.env_panel.front_reset_requested.connect(self._env_front_reset)
         self.map.terrain_place_requested.connect(self._terrain_place)
+        self.karten_split = QSplitter(Qt.Horizontal)     # Karte | 3D-Ansicht (Arbeitsbereich „3D“)
+        self.karten_split.addWidget(self.map)
+        self.platz_3d = QWidget()
+        platz_layout = QVBoxLayout(self.platz_3d)
+        platz_layout.setContentsMargins(0, 0, 0, 0)
+        self.karten_split.addWidget(self.platz_3d)
+        self.karten_split.setStretchFactor(1, 1)
+        self.platz_3d.hide()
+        self._rhi_vorbereiten()
         center = QSplitter(Qt.Vertical)
-        center.addWidget(self.map)
+        center.addWidget(self.karten_split)
         center.addWidget(self.results)
         center.setSizes([540, 300])          # unten genug Höhe für die Profile (E12)
         self.vertical_split = center
@@ -933,15 +982,31 @@ class MainWindow(QMainWindow):
         horizontal.setSizes([240, 840, 360])
         horizontal.setStretchFactor(1, 1)
         self.horizontal_split, self.left_panel, self.right_panel = horizontal, left, right
-        for splitter in (horizontal, center):
+        for splitter in (horizontal, center, self.karten_split):
             splitter.splitterMoved.connect(lambda *args: self._save_layout())
         content = QWidget()
         content_layout = QVBoxLayout(content)
         content_layout.setContentsMargins(0, 0, 0, 0)
-        self.project_heading = QLabel()
-        self.project_heading.setContentsMargins(14, 6, 14, 6)
+        self.project_heading = QLabel()          # Projektinfo: seit 27.11.2026 in der Statusleiste
+        self.project_heading.setContentsMargins(8, 0, 8, 0)
         self.project_heading.setTextFormat(Qt.RichText)
-        content_layout.addWidget(self.project_heading)
+        self.bereich_leiste = QTabBar()
+        self.bereich_leiste.setObjectName("arbeitsbereiche")
+        self.bereich_leiste.setDocumentMode(True)
+        self.bereich_leiste.setDrawBase(False)
+        self.bereich_leiste.setExpanding(False)
+        self.bereich_leiste.setUsesScrollButtons(False)
+        self.bereich_leiste.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        for nummer, key in enumerate(arbeitsbereiche.SCHLUESSEL, 1):
+            i = self.bereich_leiste.addTab(tr(arbeitsbereiche.NAMEN[key]))
+            self.bereich_leiste.setTabToolTip(i, tr(arbeitsbereiche.BESCHREIBUNG[key]) + f"  (Ctrl+{nummer})")
+        self.bereich_leiste.setCurrentIndex(arbeitsbereiche.SCHLUESSEL.index(self.arbeitsbereich))
+        self.bereich_leiste.currentChanged.connect(lambda i: self.set_workspace(arbeitsbereiche.SCHLUESSEL[i]))
+        # eine Leiste statt zwei (27.11.2026): Arbeitsbereiche links in der Werkzeugleiste, daneben die Werkzeuge des
+        # Bereichs (_werkzeuge_zeigen)
+        erstes = self.mode_actions["auswahl"]
+        self.toolbar.insertWidget(erstes, self.bereich_leiste)
+        self.toolbar.insertSeparator(erstes)
         content_layout.addWidget(horizontal, 1)
         # Maus auf Karte und Profil markiert dieselbe Stelle
         self.map.hover_changed.connect(self._map_hover)
@@ -989,6 +1054,7 @@ class MainWindow(QMainWindow):
         self.mode_hint = QLabel()
         self.mode_hint.setToolTip(tr("Active tool (V: select, P: points)"))
         self.statusBar().addPermanentWidget(self.mode_hint)
+        self.statusBar().addPermanentWidget(self.project_heading)
         self.statusBar().setFixedHeight(40)
 
     #: Ab so vielen Punkten klappt die Liste zunächst ein: Sie würde die Spalte nur füllen, gewählt wird auf der Karte
@@ -1108,11 +1174,16 @@ class MainWindow(QMainWindow):
         state = ("<span style='color:#D6A94A'>● " + tr("unsaved changes") + "</span>" if unsaved and p.folder else
                  "<span style='color:#D6A94A'>● " + tr("not saved yet") + "</span>" if unsaved else
                  "<span style='color:#5BD08A'>● " + tr("saved") + "</span>")
-        where = f"<span style='color:#8D9BA9'>&nbsp;&nbsp;{p.folder}</span>" if p.folder else ""
+        ordner = str(p.folder) if p.folder else ""
+        if len(ordner) > 40:                 # Statusleiste: lange Pfade gekürzt, der volle steht im Tooltip
+            teile = Path(ordner).parts
+            ordner = "…\\" + "\\".join(teile[-2:]) if len(teile) > 2 else ordner
+        where = f"<span style='color:#8D9BA9'>&nbsp;&nbsp;{ordner}</span>" if p.folder else ""
         readonly = ("&nbsp;&nbsp;<span style='color:#F07878'>" + tr("read-only: unknown project version") + "</span>"
                     if p.readonly else "")
-        self.project_heading.setText(f"<b style='font-size:15px'>{name}</b>&nbsp;&nbsp;&nbsp;{state}{where}{readonly}")
-        self.project_heading.setToolTip(tr("Draft state E{revision}", revision=self.document.revision))
+        self.project_heading.setText(f"<b>{name}</b>&nbsp;&nbsp;{state}{where}{readonly}")
+        self.project_heading.setToolTip(tr("Draft state E{revision}", revision=self.document.revision)
+                                        + (f"\n{p.folder}" if p.folder else ""))
 
     def _changed(self):
         if self.document.env_only:
@@ -1233,7 +1304,7 @@ class MainWindow(QMainWindow):
             button.setToolTip(reason if readonly else tr("Select a segment first.") if not button.isEnabled() else tr(("Takes effect immediately; "
                                                                                                                           "Ctrl+Z undoes.")))
         self._update_gap_button()
-        self.mode_actions["punkte"].setVisible(art == "kontrollpunkte")
+        self._werkzeuge_zeigen()
         self.mode_actions["punkte"].setEnabled(editable and art == "kontrollpunkte")
         self.mode_actions["punkte"].setToolTip(tr("Click inserts a control point.") if editable else reason)
         if art != "kontrollpunkte" and hasattr(self, "map") and self.map.mode == "punkte":
@@ -2191,9 +2262,30 @@ class MainWindow(QMainWindow):
         except ValueError as error:
             self.status_label.setText(meldung(error))
 
+    def _werkzeuge_zeigen(self):
+        """Nur die Werkzeuge des aktuellen Arbeitsbereichs zeigen (27.11.2026); „Punkte“ nur bei Kontrollpunkten."""
+        if not hasattr(self, "mode_actions"):
+            return
+        erlaubt = arbeitsbereiche.werkzeuge(getattr(self, "arbeitsbereich", "alles"))
+        for modus, action in self.mode_actions.items():
+            sichtbar = modus in erlaubt
+            if modus == "punkte":
+                sichtbar = sichtbar and self.document.ml.get("art") == "kontrollpunkte"
+            action.setVisible(sichtbar)
+        runde = "runde" in erlaubt
+        self.close_action.setVisible(runde)
+        self._trenner_runde.setVisible(runde)
+
     def set_mode(self, mode, focus=True):
         if mode == "punkte" and self.document.ml.get("art") != "kontrollpunkte":
             mode = "auswahl"
+        bereich = getattr(self, "arbeitsbereich", "alles")
+        if mode not in arbeitsbereiche.werkzeuge(bereich) and not self._bereich_wechsel:
+            # Kürzel eines Werkzeugs aus einem anderen Bereich (z. B. U im Bereich Track): dorthin wechseln
+            ziel = arbeitsbereiche.bereich_fuer_werkzeug(mode)
+            if ziel and ziel != bereich:
+                self.set_workspace(ziel)
+
         if mode == "nachzeichnen" and (self.werkzeug_bild.vorlage is None or self.document.project.readonly):
             if focus and self.werkzeug_bild.vorlage is None and not self.document.project.readonly:
                 self.status_label.setText(tr("Tracing needs a reference image: Project → “Load reference image …” or "
@@ -2208,7 +2300,7 @@ class MainWindow(QMainWindow):
         if focus:
             self.map.setFocus()
         self._point_section_update(self.objects.count())
-        self.mode_hint.setText({"punkte": tr("Tool: points (INSERT)"), "umgebung": tr("Tool: Environment (U)"),
+        self.mode_hint.setText({"punkte": tr("Tool: points (INSERT)"), "umgebung": tr("Tool: Place (U)"),
                                 "streuen": tr("Tool: Plant (B)"), "nachzeichnen": tr("Tool: Trace (N)"),
                                 "kameras": tr("Tool: Cameras (K)")}.get(mode, tr("Tool: select")))
         if mode == "kameras":
@@ -2217,6 +2309,8 @@ class MainWindow(QMainWindow):
         self.env_panel.selection_box.setVisible(mode in ("umgebung", "streuen"))
         self.env_panel.terrain_box.setVisible(mode in ("umgebung", "streuen"))
         self._refresh_bank_panel()
+        if mode in ("umgebung", "streuen") and focus and self.arbeitsbereich in ("strecke", "bauen"):
+            self.set_workspace("umgebung")
         if mode in ("umgebung", "streuen") and focus:
             self.show_results(self.env_panel)                  # Katalog und Einstellungen zeigen (lädt den Katalog)
             self._results_tab_changed()
@@ -2227,7 +2321,191 @@ class MainWindow(QMainWindow):
             setattr(self.map, attr, value)
             self.map.rebuild(self.preview)
 
-    def set_station(self, station):
+    def _3d_erzeugen(self):
+        """3D-Ansicht anlegen; None, wenn Qt Quick 3D fehlt (z. B. unvollständig gepackt): Meldung statt Absturz
+        (26.11.2026: gepackte 0.5.1-Spec schloss QtQuick aus, der Start im Arbeitsbereich 3D brach ab)."""
+        try:
+            from .ansicht3d_ui import Ansicht3D
+        except ImportError as e:
+            self.status_label.setText(tr("The 3D view is not available in this installation ({fehler}).", fehler=e))
+            return None
+        if self.ansicht_3d is None:
+            vorhanden = self.netz_3d is not None or self.netz_von_platte()
+            self.ansicht_3d = Ansicht3D(self)
+            self.ansicht_3d.station_geaendert.connect(lambda s: self.set_station(s, von_3d=True))
+            if not vorhanden and self.auto_analysis is False:
+                self.status_label.setText(tr("3D view: run the racing line (Check) to see the track."))
+            if not vorhanden or not self._welt_3d_vorhanden():
+                self.check_cache.pop(self.current_key(), None)     # ältere Läufe ohne Netz (oder Logik) neu rechnen
+                self.analysis_timer.start()
+        return self.ansicht_3d
+
+    def show_whats_new(self):
+        """Hilfe → What's new …: Release Notes der laufenden Version (aktualisierung_ui)."""
+        from . import aktualisierung_ui
+        aktualisierung_ui.neu_zeigen(self)
+
+    def check_for_updates(self):
+        """Hilfe → Check for updates …: neues Release auf GitHub suchen (aktualisierung_ui)."""
+        from . import aktualisierung_ui
+        self.status_label.setText(tr("Checking for updates …"))
+        aktualisierung_ui.pruefen(self, manuell=True)
+
+    def open_3d_view(self):
+        """3D-Ansicht im eigenen Fenster (docs/3d_ansicht.md); eingebettet im Arbeitsbereich „3D“."""
+        a = self._3d_erzeugen()
+        if a is None:
+            return
+        if a.parent() is not None:                              # aus dem Arbeitsbereich lösen
+            self.platz_3d.layout().removeWidget(a)
+            a.setParent(None, Qt.Window)
+            a.resize(1280, 760)
+            self.platz_3d.hide()
+        a.show()
+        a.raise_()
+        a.activateWindow()
+
+    def _3d_einbetten(self):
+        platzhalter = None
+        if self.ansicht_3d is None and self.isVisible():
+            # Anlegen blockiert einige Sekunden (Qt Quick 3D übersetzt die Shader): vorher sichtbar ankündigen
+            platzhalter = self._3d_platzhalter()
+        try:
+            a = self._3d_erzeugen()
+        finally:
+            if platzhalter is not None:
+                self.platz_3d.layout().removeWidget(platzhalter)
+                platzhalter.deleteLater()
+        if a is None:
+            return False
+        if a.parent() is not self.platz_3d:
+            a.setParent(self.platz_3d, Qt.Widget)
+            self.platz_3d.layout().addWidget(a)
+        a.show()
+        self.platz_3d.show()
+        return True
+
+    def _rhi_vorbereiten(self):
+        """Ein verborgenes QQuickWidget von Anfang an (27.11.2026): Kommt das erste GPU-Widget erst in das sichtbare
+        Fenster, erzeugt Qt das Hauptfenster neu (es verschwindet kurz und erscheint wieder). Kostet beim Start etwa
+        0,15 s. ``MAPEDITOR_KEIN_3D_VORLAUF`` schaltet es ab."""
+        self._rhi_platzhalter = None
+        if os.environ.get("MAPEDITOR_KEIN_3D_VORLAUF"):
+            return
+        try:
+            from PySide6.QtQuickWidgets import QQuickWidget
+        except ImportError:                    # ohne Qt Quick gibt es keine 3D-Ansicht
+            return
+        self._rhi_platzhalter = QQuickWidget(self.platz_3d)
+        self._rhi_platzhalter.hide()
+
+    def _3d_platzhalter(self):
+        """Hinweis „3D-Ansicht wird geladen“ im Platz der Ansicht, sofort gezeichnet."""
+        from PySide6.QtWidgets import QProgressBar
+        rahmen = QWidget()
+        lay = QVBoxLayout(rahmen)
+        lay.addStretch(1)
+        text = QLabel("<b>%s</b><br>%s" % (tr("Loading the 3D view …"),
+                                            tr("Preparing graphics (shaders), this takes a few seconds.")))
+        text.setAlignment(Qt.AlignCenter)
+        balken = QProgressBar()
+        balken.setRange(0, 0)
+        balken.setTextVisible(False)
+        balken.setFixedHeight(8)
+        balken.setMaximumWidth(360)
+        lay.addWidget(text)
+        lay.addWidget(balken, 0, Qt.AlignHCenter)
+        lay.addStretch(1)
+        self.platz_3d.layout().addWidget(rahmen)
+        self.platz_3d.show()
+        rahmen.show()
+        for _ in range(3):                 # Layout und Zeichnen, bevor das Anlegen den Ereignisfluss anhält
+            QApplication.processEvents()
+        rahmen.repaint()
+        return rahmen
+
+    def _3d_ausblenden(self):
+        if self.ansicht_3d is not None and self.ansicht_3d.parent() is self.platz_3d:
+            self.platz_3d.hide()
+
+    # ------------------------------------------------------------------ Arbeitsbereiche (arbeitsbereiche.py)
+    def set_workspace(self, name, merken=True):
+        """Arbeitsbereich anwenden: Flächen, Reiter, Werkzeug, 3D-Ansicht und Teilergrößen."""
+        if name not in arbeitsbereiche.SCHLUESSEL or self._bereich_wechsel:
+            return
+        self._bereich_wechsel = True
+        breite = self.map.viewport().width()
+        try:
+            self.arbeitsbereich = name
+            stand = self.bereich_stand = (arbeitsbereiche.laden(name) if self.interactive
+                                          else arbeitsbereiche.vorgabe(name))
+            for key, on in stand["schalter"].items():
+                self.apply_feature(key, on, save=False)
+            if stand["3d"] and not self._3d_einbetten():
+                self._bereich_wechsel = False                # ohne 3D-Ansicht: zurück auf „Track“
+                return self.set_workspace("strecke", merken=merken)
+            if not stand["3d"]:
+                self._3d_ausblenden()
+            self._bereich_groessen(stand)
+            seite = self.tab_features.get(stand["reiter"]) if stand["reiter"] else None
+            if seite is not None and self.results.isTabVisible(self.results.indexOf(seite)):
+                self.results.setCurrentWidget(seite)
+            werkzeug = stand["werkzeug"]
+            if werkzeug == "umgebung" and self.map.mode not in ("umgebung", "streuen"):
+                self.set_mode("umgebung", focus=False)
+            elif werkzeug == "auswahl" and self.map.mode in ("umgebung", "streuen"):
+                self.set_mode("auswahl", focus=False)
+            if self.map.mode not in arbeitsbereiche.werkzeuge(name):
+                self.set_mode("auswahl", focus=False)
+            self._werkzeuge_zeigen()
+            i = arbeitsbereiche.SCHLUESSEL.index(name)
+            if self.bereich_leiste.currentIndex() != i:
+                self.bereich_leiste.blockSignals(True)
+                self.bereich_leiste.setCurrentIndex(i)
+                self.bereich_leiste.blockSignals(False)
+            action = self.bereich_actions.get(name)
+            if action is not None and not action.isChecked():
+                action.setChecked(True)
+            if self.interactive and merken:
+                arbeitsbereiche.aktiv_merken(name)
+            self._results_tab_changed()
+        finally:
+            self._bereich_wechsel = False
+        QTimer.singleShot(0, lambda: self._karte_nach_bereich(breite))
+
+    def _karte_nach_bereich(self, breite_vorher):
+        """Karte neu einpassen, wenn der Bereichswechsel ihre Breite stark verändert hat (z. B. neben der 3D-Ansicht)."""
+        breite = self.map.viewport().width()
+        if breite_vorher > 0 and abs(breite - breite_vorher) > 0.3 * breite_vorher:
+            self.map.fit_track()
+
+    def _bereich_groessen(self, stand):
+        groessen, anteile = stand.get("groessen") or {}, stand.get("anteile") or {}
+        for key, splitter in (("horizontal", self.horizontal_split), ("vertikal", self.vertical_split),
+                              ("karte3d", self.karten_split)):
+            sizes = groessen.get(key)
+            if not sizes or len(sizes) != splitter.count() or sum(sizes) <= 0:
+                if key not in anteile:
+                    continue
+                gesamt = sum(splitter.sizes()) or (self.width() if splitter.orientation() == Qt.Horizontal
+                                                   else self.height())
+                sizes = arbeitsbereiche.groessen_aus_anteilen(anteile[key], gesamt)
+            splitter.setSizes(sizes)
+
+    def _bereich_merken(self):
+        if self.interactive and self.bereich_stand is not None and not self._bereich_wechsel:
+            arbeitsbereiche.merken(self.arbeitsbereich, self.bereich_stand)
+
+    def reset_workspace(self):
+        """Gemerkte Änderungen des aktuellen Arbeitsbereichs verwerfen."""
+        if self.interactive:
+            arbeitsbereiche.vergessen(self.arbeitsbereich)
+        self.set_workspace(self.arbeitsbereich)
+        self.status_label.setText(tr("Workspace “{name}” reset.", name=tr(arbeitsbereiche.NAMEN[self.arbeitsbereich])))
+
+    def set_station(self, station, von_3d=False):
+        if not von_3d and self.ansicht_3d is not None and self.ansicht_3d.isVisible() and not self.ansicht_3d.spielt:
+            self.ansicht_3d.station_setzen(station)
         self.map.station = station
         self.map.viewport().update()
         for widget in (self.height, self.bank, self.cross, self.speed):
@@ -2388,10 +2666,30 @@ class MainWindow(QMainWindow):
         if checked and self.preview is not None:
             self.analysis_timer.start()
 
+    def netz_von_platte(self) -> bool:
+        """Netz der 3D-Ansicht zum aktuellen Definitionsstand aus dem Zwischenspeicher (``netz_datei(check_key)``,
+        stabil über Sitzungen): sofort zeigen statt auf den Fahrlinienlauf zu warten (3d_ladeperformance.md). Der
+        Lauf ersetzt die Datei danach, die Ansicht lädt sie dann neu."""
+        try:
+            from .ansicht3d import netz_datei
+            pfad = netz_datei(self.current_key())
+        except Exception:  # noqa: BLE001  ohne Projekt/Schlüssel einfach nicht
+            return False
+        if pfad.is_file() and str(pfad) != self.netz_3d:
+            self.netz_3d = str(pfad)
+            return True
+        return pfad.is_file()
+
+    def _welt_3d_vorhanden(self) -> bool:
+        from .ansicht3d import welt_datei
+        return bool(self.netz_3d) and welt_datei(self.netz_3d).is_file()
+
     def request_analysis(self, force=False):
         if not self.document.project.closed or self.preview is None:
             return
         key = self.current_key()
+        if self.ansicht_3d is not None:
+            self.netz_von_platte()        # schon gerechneter Stand (z. B. nach Rückgängig): 3D sofort
         if key in self.check_cache:
             self.apply_analysis(self.check_cache[key], key)
             return
@@ -2406,9 +2704,11 @@ class MainWindow(QMainWindow):
         except ValueError as error:
             self.map.analysis_note = tr("Racing line not available: {error}", error=error)
             return
+        from .ansicht3d import netz_datei
         payload = {"task": "analyse", "raw": copy.deepcopy(self.document.project.raw),
                    "basis": str(self.document.project.basis), "toolkit": str(root),
-                   "shift": self.document.project.manifest.get("versatz", [0, 0, 0])}
+                   "shift": self.document.project.manifest.get("versatz", [0, 0, 0]),
+                   "netz_3d": str(netz_datei(key))}
         self.analysis_job, self.analysis_job_key = ProcessJob(self), key
         self.analysis_job.done.connect(lambda code, text, key=key: self._analysis_done(code, text, key))
         self.analysis_job.start(worker_command(), payload)
@@ -2460,6 +2760,8 @@ class MainWindow(QMainWindow):
         self.map.focus_curve = None
         self.set_issues(result["issues"], result.get("report", {}))
         self.analysis = result.get("analysis")
+        if result.get("netz_3d"):
+            self.netz_3d = result["netz_3d"]
         for widget in (self.map, self.speed):
             widget.analysis = self.analysis
         self.map.analysis_stale = self.speed.stale = False
@@ -2609,6 +2911,9 @@ class MainWindow(QMainWindow):
             self.view_dialog.sync(key, on)
         if save and not (key == "fahrlinie_auto" and not self.interactive):
             ansicht.save_state(key, on)
+        if save and key in arbeitsbereiche.SCHALTER and self.bereich_stand is not None:
+            self.bereich_stand["schalter"][key] = on
+            self._bereich_merken()
 
     # ------------------------------------------------------------------ Höhe als Farbe, Mauskopplung Karte/Profil
     def _apply_height_colors(self):
@@ -2692,6 +2997,12 @@ class MainWindow(QMainWindow):
         store.setValue("layout/horizontal", self.horizontal_split.sizes())
         vertikal = self.vertical_split.sizes()
         store.setValue("layout/vertikal", vertikal)
+        if self.bereich_stand is not None and not self._bereich_wechsel:
+            groessen = {"horizontal": self.horizontal_split.sizes(), "vertikal": vertikal}
+            if self.platz_3d.isVisible():
+                groessen["karte3d"] = self.karten_split.sizes()
+            self.bereich_stand.setdefault("groessen", {}).update(groessen)
+            self._bereich_merken()
 
     def _restore_layout(self):
         if not self.interactive:
@@ -3082,6 +3393,20 @@ class MainWindow(QMainWindow):
         self.playtest_dialog = PlaytestDialog(self.document.project, self, select=select)
         self.playtest_dialog.exec()
 
+    def open_swofty_addons(self):
+        """Installierte Swofty-Addons verwalten (20.11.2026)."""
+        from .adapter import swofty_programm
+        from .ansicht import settings as app_settings
+        from .build import SwoftyAddonsDialog
+        settings = self.document.project.manifest.get("bauen") or {}
+        programm = (swofty_programm(app_settings().value("swofty/programm") or None)
+                    or swofty_programm(settings.get("swofty_programm")))
+        if programm is None:
+            self.error(tr("Swofty Launcher not found: choose swofty.exe in the build dialog first."))
+            return
+        self.swofty_dialog = SwoftyAddonsDialog(programm, self)
+        self.swofty_dialog.exec()
+
     def open_cleanup(self):
         from .build import CleanupDialog, build_folders
         try:
@@ -3147,6 +3472,10 @@ class MainWindow(QMainWindow):
             "QLabel#heading { color: %(muted)s; font-size: 11px; font-weight: 600; letter-spacing: 1px; padding-top: 4px; } "
             "QFrame#welcome { border: 1px solid %(line)s; border-radius: 8px; } "
             "QTabBar::tab { padding: 8px 12px; } QTableWidget::item { padding: 5px; } QListWidget::item { padding: 4px; } "
+            "QTabBar#arbeitsbereiche::tab { padding: 5px 14px; margin-right: 2px; border: none; border-radius: 4px; "
+            "color: %(muted)s; background: transparent; } "
+            "QTabBar#arbeitsbereiche::tab:selected { background: #005C73; color: #FFFFFF; font-weight: 600; } "
+            "QTabBar#arbeitsbereiche::tab:hover:!selected { color: palette(text); background: %(line)s; } "
             "QSplitter::handle { background: %(line)s; } QStatusBar QLabel { padding: 0 6px; }"
             % {"line": line, "muted": muted})
         self.map.dark = dark
@@ -3722,6 +4051,11 @@ class MainWindow(QMainWindow):
         self._apply_env_catalog()
 
     def _results_tab_changed(self, *args):
+        if self.bereich_stand is not None and not self._bereich_wechsel and args:
+            key = next((k for k, w in self.tab_features.items() if w is self.results.currentWidget()), None)
+            if key and self.bereich_stand.get("reiter") != key:
+                self.bereich_stand["reiter"] = key
+                self._bereich_merken()
         self._refresh_bank_panel()
         self._update_track_hover()
         if self.results.currentWidget() is self.env_panel and self.env_catalog is None and self.interactive:
@@ -3841,7 +4175,46 @@ class MainWindow(QMainWindow):
         folder = getattr(self.document.project, "folder", None)
         return str(folder) if folder else None
 
-    def import_own_model(self, path=None, lods=None):
+    def open_model_library(self):
+        """Modellbibliothek: Modell ins Projekt übernehmen oder aus der Bibliothek löschen (20.11.2026)."""
+        from . import bibliothek
+        from .umgebung_ui import LibraryDialog
+        dialog = LibraryDialog(bibliothek.liste(), self)
+        if dialog.exec() != QDialog.Accepted or dialog.gewaehlt() is None:
+            return
+        eintrag = dialog.gewaehlt()
+        if dialog.aktion == "loeschen":
+            bibliothek.entfernen(eintrag["name"])
+            self.status_label.setText(tr("usr_{name} deleted from the model library.", name=eintrag["name"]))
+            return
+        auftrag = bibliothek.import_auftrag(eintrag)
+        self.import_own_model(auftrag["datei"], auftrag["lods"], name=auftrag["name"], optionen=auftrag["optionen"])
+
+    def save_model_to_library(self, name):
+        """Eigenes Modell des Projekts samt Einstellungen in die Bibliothek kopieren."""
+        from . import bibliothek
+        project = self._model_project()
+        if not project:
+            return
+        try:
+            tabelle = json.loads((Path(project) / "modelle" / "modelle.json").read_text(encoding="utf-8"))
+            eintrag = next(e for e in tabelle.get("modelle", []) if e.get("name") == name)
+        except (OSError, ValueError, StopIteration):
+            self.status_label.setText(tr("usr_{name} could not be saved to the library.", name=name))
+            return
+        vorhanden = any(e["name"] == name for e in bibliothek.liste())
+        if vorhanden and self.interactive and QMessageBox.question(
+                self, tr("Save to library"), tr("usr_{name} is already in the library. Replace it?", name=name)
+        ) != QMessageBox.Yes:
+            return
+        try:
+            bibliothek.speichern(project, eintrag, ersetzen=vorhanden)
+        except bibliothek.BibliothekFehler as error:
+            self.status_label.setText(tr("usr_{name} could not be saved to the library.", name=name) + " " + str(error))
+            return
+        self.status_label.setText(tr("usr_{name} saved to the model library.", name=name))
+
+    def import_own_model(self, path=None, lods=None, name=None, optionen=None):
         """Eigenes 3D-Modell ins Projekt übernehmen (Arbeitsprozess) und danach im Katalog wählen."""
         project = self._model_project()
         if not project or self.document.project.readonly:
@@ -3863,8 +4236,11 @@ class MainWindow(QMainWindow):
         self.model_job = ProcessJob(self)
         self.model_job.done.connect(lambda code, text, path=path: self._model_import_done(path, code, text))
         self.status_label.setText(tr("Importing model {datei} …", datei=Path(path).name))
-        self.model_job.start(worker_command(), {"task": "modell_importieren", "projekt": project, "datei": str(path),
-                                                "lods": [str(x) for x in (lods or [])], "toolkit": str(root)})
+        auftrag = {"task": "modell_importieren", "projekt": project, "datei": str(path),
+                   "lods": [str(x) for x in (lods or [])], "toolkit": str(root)}
+        if name:                       # aus der Modellbibliothek: Name und Einstellungen übernehmen, Eintrag ersetzen
+            auftrag.update(name=name, optionen=optionen or {}, ersetzen=True)
+        self.model_job.start(worker_command(), auftrag)
 
     def _model_import_done(self, path, code, text):
         job, self.model_job = self.model_job, None
@@ -3924,6 +4300,38 @@ class MainWindow(QMainWindow):
         self.model_job.start(worker_command(), {"task": "modell_aendern", "projekt": project, "name": name,
                                                 "optionen": {"kollision": "quader" if an else "keine"},
                                                 "toolkit": str(root)})
+
+    def set_own_model_animation(self, name, an):
+        """A4: Animation eines eigenen Modells abspielen oder nicht (``modelle.json`` → ``animation``)."""
+        project = self._model_project()
+        if not project or not name or self.model_job:
+            return
+        try:
+            root = toolkit_path(self.document.project.manifest.get("werkzeugkasten"))
+        except ValueError as error:
+            QMessageBox.warning(self, tr("Play animation"), meldung(error))
+            return
+        self.model_job = ProcessJob(self)
+        self.model_job.done.connect(lambda code, text, name=name, an=an: self._model_animation_done(name, an, code, text))
+        self.model_job.start(worker_command(), {"task": "modell_aendern", "projekt": project, "name": name,
+                                                "optionen": {"animation": "an" if an else "aus"},
+                                                "toolkit": str(root)})
+
+    def _model_animation_done(self, name, an, code, text):
+        job, self.model_job = self.model_job, None
+        if job:
+            job.deleteLater()
+        try:
+            result = json.loads(text)
+            if code != 0 or "error" in result:
+                raise ValueError(result.get("error", text))
+        except (ValueError, TypeError) as error:
+            self.status_label.setText(tr("Animation not changed: {error}", error=meldung(str(error))[:200]))
+            self.load_env_catalog()
+            return
+        self.status_label.setText(tr("Model usr_{name}: animation plays.", name=name) if an else
+                                  tr("Model usr_{name}: animation off, rest pose.", name=name))
+        self.load_env_catalog()
 
     def _model_collision_done(self, name, an, code, text):
         job, self.model_job = self.model_job, None
@@ -3985,7 +4393,74 @@ class MainWindow(QMainWindow):
         self.status_label.setText(tr("{modell} placed at X {x} · Z {z} · Ctrl+Z undoes.",
                                      modell=umgebung.kurzname(modell), x=zahl(objekt["x"], 1), z=zahl(objekt["z"], 1)))
 
-    def _env_scatter(self, area):
+    def _env_line(self):
+        """Mittellinie als ``umgebung.Linie`` (Vorschau ab Start/Ziel, sonst Eingabe) oder None."""
+        punkte = self._env_centreline()
+        try:
+            return umgebung.Linie(punkte) if punkte else None
+        except ValueError:
+            return None
+
+    def _env_plant_now(self):
+        """Band entlang der Strecke oder Innenfeld bepflanzen (ohne Zeichnen, 20.11.2026)."""
+        if not self.document.env_editable:
+            return
+        linie = self._env_line()
+        if linie is None:
+            self.status_label.setText(tr("No track yet: close the lap first."))
+            return
+        settings = self.env_panel.scatter_settings()
+        try:
+            if settings["form"] == "band":
+                hindernis = self._env_obstacle()
+                gebiet = umgebung.GebietBand(linie, settings["band_von"], settings["band_bis"], settings["band_seite"],
+                                             settings["abstand_fahrbahn"],
+                                             settings["abstand_fahrbahn"] + settings["band_breite"], hindernis)
+            else:
+                gebiet = umgebung.GebietInnen(linie)
+        except umgebung.StreuFehler:
+            self.status_label.setText(tr("Planting not possible: no area or no model."))
+            return
+        self._env_scatter(None, gebiet)
+
+    def _env_row(self, settings):
+        """Reihe entlang der Strecke (Tribünen, Zäune, Fahnen): erstes gewähltes Modell, ein Undo-Schritt."""
+        if not self.document.env_editable:
+            return
+        modelle = self.env_panel.chosen_models()
+        modell = (modelle[0] if modelle else None) or self.env_panel.armed_model()
+        if not modell:
+            self.status_label.setText(tr("To place a row, first choose a model in the catalogue."))
+            return
+        linie = self._env_line()
+        if linie is None:
+            self.status_label.setText(tr("No track yet: close the lap first."))
+            return
+        korrekturen = self.document.env.get("vorderseiten") or {}
+        vorne = umgebung.vorderseite(modell, self.map.env_index, korrekturen)[0]
+        gruppe = settings["gruppe"] or umgebung.neue_gruppe(self.document.env_objects, tr("Row {n}"))
+        try:
+            objekte, info = umgebung.reihe(
+                linie, modell, settings["von_s"], settings["bis_s"], settings["schritt_m"], settings["seite"],
+                settings["abstand_m"], hindernis=self._env_obstacle(), ausrichtung=settings["ausrichtung"],
+                vorne_grad=vorne, gruppe=gruppe, vorhanden=self.document.env_objects,
+                versatz=self.document.project.manifest.get("versatz", [0, 0, 0]))
+        except umgebung.StreuFehler as error:
+            self.status_label.setText(
+                tr("Too many objects ({anzahl}, at most {maximum}): reduce the density or the area.", **error.werte)
+                if error.code == "zu_viele" else tr("Distance between objects must be greater than 0."))
+            return
+        if not objekte:
+            self.status_label.setText(tr("Nothing placed: the area is outside the track area (world X −920 … 1128, "
+                                         "Z −1008 … 1040 m, offset included)."))
+            return
+        self.document.env_add(objekte, tr("Row along the track ({anzahl} objects)", anzahl=len(objekte)))
+        text = tr("{anzahl} objects placed in the group “{gruppe}” · Ctrl+Z undoes.", anzahl=len(objekte), gruppe=gruppe)
+        if not info["ab_mauer"]:
+            text += " " + tr("(distance measured from the centreline: the preview is not up to date)")
+        self.status_label.setText(text)
+
+    def _env_scatter(self, area, gebiet=None):
         """Fläche bepflanzen: Einstellungen aus dem Reiter, Ergebnis als ein Undo-Schritt und eine Gruppe."""
         settings = self.env_panel.scatter_settings()
         modelle = self.env_panel.chosen_models()
@@ -3994,8 +4469,9 @@ class MainWindow(QMainWindow):
             return
         shift = self.document.project.manifest.get("versatz", [0, 0, 0])
         try:
-            gebiet = (umgebung.Gebiet("pinsel", punkte=area["punkte"], radius=area["radius"]) if area["form"] == "pinsel"
-                      else umgebung.Gebiet("rechteck", rechteck=area["rechteck"]))
+            if gebiet is None:
+                gebiet = (umgebung.Gebiet("pinsel", punkte=area["punkte"], radius=area["radius"])
+                          if area["form"] == "pinsel" else umgebung.Gebiet("rechteck", rechteck=area["rechteck"]))
             gruppe = settings["gruppe"] or umgebung.neue_gruppe(self.document.env_objects, tr("Scatter {n}"))
             objekte, info = umgebung.streuen(
                 gebiet, modelle, settings["dichte"], settings["seed"], hindernis=self._env_obstacle(),
@@ -4231,6 +4707,11 @@ class MainWindow(QMainWindow):
             if dialog is not None:
                 dialog.close()
         self.view_dialog = self.help_dialog = None
+        if self.ansicht_3d is not None:                 # Texte der 3D-Ansicht: neu erzeugen
+            self.ansicht_3d.setParent(None)
+            self.ansicht_3d.close()
+            self.ansicht_3d.deleteLater()
+            self.ansicht_3d = None
         self.removeToolBar(self.toolbar)
         self.toolbar.deleteLater()
         self.removeDockWidget(self.bild_dock)

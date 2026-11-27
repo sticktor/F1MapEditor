@@ -191,7 +191,8 @@ def _erp_auf_traeger(roh_pfad: str, ziel_pfad: str, code: str) -> int:
     return len(geaendert)
 
 
-def swofty_addon_bauen(quelle: str, ziel: str, name: Optional[str] = None, protokoll=print, geteilt: bool = False) -> dict:
+def swofty_addon_bauen(quelle: str, ziel: str, name: Optional[str] = None, protokoll=print, geteilt: bool = False,
+                       vorlage: str = None, beschreibung: Optional[str] = None) -> dict:
     """Geprüftes Paket (ZIP) als Swofty-Addon (ZIP) schreiben: ``swofty.json``, ``assets/track.json``, Paket unter ``track/``.
     Ein Addon statt eines Strecken-ZIPs, weil nur so eigene Menütexte möglich sind; die Id kollidiert nicht mit dem Katalog."""
     with zipfile.ZipFile(quelle) as z:
@@ -200,7 +201,8 @@ def swofty_addon_bauen(quelle: str, ziel: str, name: Optional[str] = None, proto
         name = name or m.get("track_name") or code
         ops, felder = swofty_namen(code, name)
         akt = m.get("activation") or {}
-        m["activation"] = {"copy_from_track": SWOFTY_VORLAGE, "copy_slot": SWOFTY_VORLAGE,
+        vorlage = vorlage or SWOFTY_VORLAGE
+        m["activation"] = {"copy_from_track": vorlage, "copy_slot": vorlage,
                            "overrides": (akt.get("overrides") or []) + [{"path": "TrackNameData_0." + f, "value": s} for f, s in felder],
                            "track_overrides": (akt.get("track_overrides") or []) + [{"path": f, "value": s} for f, s in felder]}
         m["author_name"], m["version"] = "Mapeditor", "1.0.0"
@@ -208,7 +210,7 @@ def swofty_addon_bauen(quelle: str, ziel: str, name: Optional[str] = None, proto
         if traeger:   # ohne Mip-Dateien, die liefert das Träger-Addon
             m.pop("copy_directories", None)
         addon = {"schema_version": 1, "id": "mapeditor." + code, "name": name, "version": "1.0.0", "author": "Mapeditor",
-                 "description": "Custom track built with Mapeditor on the Portimão mod as carrier.",
+                 "description": beschreibung or "Custom track built with Mapeditor on the Portimão mod as carrier.",
                  "category": "tracks", "kind": ["database", "erp"],
                  "compat": {"game": "f1_25"}, "operations": {"assets": ["assets/track.json"]}}
         if traeger:
@@ -282,6 +284,9 @@ class Umbenennung:
             raise StreckencodeFehler("Old and new code are the same (%s)" % alt)
         self.alt, self.neu = alt, neu
         self.alt_b = alt.encode()
+        # Spielstrecke als Träger (strecke/spieltraeger.py): Mip-Pfade in den Spielordner (environment_package/tracks/<alt>/…)
+        # bleiben stehen, das Spiel lädt die Texturen weiter aus seinem Ordner
+        self.mip_spiel_behalten = False
         self._praefixe = (
             ("eaid://environment_package/tracks/%s/" % alt, "eaid://environment_package/tracks/%s/" % neu, True),
             ("eaid://ui_package/art/textures/track_installer/%s/" % alt,
@@ -545,6 +550,8 @@ def _umbenennen_fragment(auftrag):
         neu = GRAFIK[typ](d, regeln.kennung)
     if neu is not None:
         d = neu
+    if getattr(regeln, "mip_spiel_behalten", False) and typ == "GfxSurfaceRes" and i == 2:
+        return neu, (erp.fragment_packen(neu) if neu is not None else None), False, None
     for muster in regeln.reste:
         if muster in d:
             raise StreckencodeFehler("%s (%s): unsupported reference with %r remains"

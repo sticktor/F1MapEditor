@@ -23,6 +23,27 @@
 <tr><td><b>V</b> · <b>P</b></td><td>Select or points tool</td></tr>
 <tr><td><b>Click on T4</b></td><td>Show the corner large (braking zone to corner exit, info label with angle, radius, km/h, boards)</td></tr>
 </table>
+<h3>Updates</h3>
+<p>At most once a day the editor asks GitHub whether a new version exists (switch off under <i>View → Automation</i>;
+no personal data is sent). If there is one, a window shows its release notes: <b>Download and install</b> fetches it,
+checks it and replaces this installation after a restart (projects, settings and the carrier package are kept),
+<b>Skip this version</b> stays quiet until the next one. <i>Help → Check for updates …</i> asks at any time, <i>Help →
+What's new …</i> shows the release notes of this version; they also appear once after an update.</p>
+<h3>Workspaces and 3D view</h3>
+<p>The tabs at the left of the toolbar switch the <b>workspace</b>: <i>Track</i> (map, properties, height and banking profiles),
+<i>Environment</i> (map, catalogue, object properties, Place tool), <i>3D</i> (map and 3D view side by side),
+<i>Review</i> (checks and analysis) and <i>All</i> (everything at once). Shortcuts Ctrl+1 … Ctrl+5. Next to the tabs the toolbar shows only the tools of the workspace (<i>Track</i>: Select, Points, Trace, Cameras, Close lap; <i>Environment</i>: Select, Place, Plant); a tool shortcut from another workspace (e.g. U, B, N, K) switches there. Project name, save state and folder are in the status bar. What you change in a
+workspace (panels and tabs under <i>View</i>, splitter sizes, front tab) is remembered for that workspace;
+<i>View → Workspace → Reset this workspace</i> restores its default. Map layers and automations are the same everywhere.
+<i>View → 3D view in its own window …</i> (Ctrl+Shift+3) moves the 3D view to a separate window.</p>
+<p><b>3D camera</b> (<i>Editor</i>): left drag orbits around the point under the mouse, middle or Shift+left drag pans,
+the wheel zooms towards the mouse, a double-click flies there. Hold the right mouse button to look around and fly with
+W A S D, Q/E down/up, Shift fast; the wheel then sets the flying speed (it also grows with the height). Without the
+right mouse button W A S D move parallel to the ground. Home shows the whole track, F focuses the selected object or the
+car. <i>Onboard</i>, <i>Chase</i> and <i>TV</i> follow the car (<i>Play</i>, space bar); dragging takes over from
+there. <i>Edit</i> (Tab): click selects and drags objects, R rotates, Del deletes.</p>
+<p><b>Game look</b> (button in the 3D view, remembered): the track gets the real surfaces from the game (asphalt or the chosen track surface, kerb atlas with white start and end pieces, sausage kerbs, grass and gravel in the chosen landscape, concrete, artificial grass), the outer terrain of the carrier with your mountains and the colours of the build, and the carrier's garages, pit perches, livery boards and braking boards exactly where the build places them (the build steps run on a copy in memory). Barriers, fences and signs of the carrier are removed by the build and therefore not shown. Everything is only read from the carrier package and the F1 25 folder into a local cache; the first time takes about 15 seconds, later it is instant. With the game look on, the braking boards are the real ones of the carrier, otherwise numbered boards stand in for them. <i>Layers</i> switches outer terrain and pit buildings on and off.</p>
+<p><b>Game look</b> (3D view) also replaces the simple shapes with the game's models, including trees, bushes and palms with cut-out leaves. They are read from your F1 25 folder into a local cache and drawn as GPU instances, so hundreds of trees stay smooth.</p>
 <h3>Show and hide</h3>
 <p>Every function can be shown or hidden: <i>View</i> → map layers (grid, edges, direction, play area, zones,
 racing line, pit/grid slots/sectors, corner numbers, input points, labels, scale, hint labels), areas (side panel,
@@ -192,6 +213,21 @@ from the launcher, offline and without EA AntiCheat. Quick swap isn't needed for
 <b>Same as track</b> continues the banking at every point over the first 12 m, <b>Custom angle</b> uses a fixed value (positive
 rises outwards). Choose range and side as for the other fields, <b>Whole lap</b> takes the entire track. Then press
 <b>Apply</b>.</p>
+<h3>Kerb types</h3>
+<p>In the <b>Cross-section</b> tab, <b>Kerb type</b> fills the fields below it: <i>Flat</i>, <i>Raised</i> (kerb 4 cm
+above the asphalt with sloped edges, like in the game), <i>Negative behind</i> (a lowered strip behind the kerb with the
+game's off-track rumble physics) and <i>Double</i> (both). <b>Kerb height</b>, <b>Negative kerb</b> (width) and
+<b>Depth</b> can also be set directly. Every kerb starts and ends with the game's white, rounded end pieces. Under
+<b>Run-off</b>, <i>Artificial grass</i> uses the artificial grass of Melbourne; the build copies its textures from your
+F1 25 folder (read only), so the game folder must be set.</p>
+<h3>Sausage kerbs</h3>
+<p>In the <b>Cross-section</b> tab, <b>Sausage kerb</b> sets the height of raised kerbs behind the kerb (real ones
+0.05–0.3 m, <i>none</i> = no sausage kerb). <b>Sausage width</b> (standard 0.6 m) and <b>Behind kerb</b> (distance from
+the outer edge of the kerb, standard 0.1 m, negative = on the kerb) are optional. The build places a continuous, rounded
+kerb with sloped ends at the start and end of the range (<b>Piece length</b>, standard 4 m, and <b>Gap between
+pieces</b>, standard 0 m, split it into separate blocks), in Portimão's sausage-kerb material and with the game's bump physics
+(<code>BUMP</code>). Map, cross-section and 3D view show them in yellow. There are none in the pit lane. Check WU-01 warns
+when a sausage kerb is within 2 m of the racing line, for example right at the road edge without a kerb in front.</p>
 <h3>Ground and surroundings</h3>
 <p>Under <b>Advanced build options</b>, <b>Own ground and surroundings maps</b> replaces the template's aerial photos: the ground comes from the track surfaces, the racing line sits on the asphalt and the surroundings match hills and mountains. <b>Landscape</b> selects grass or desert (no ground cover), <b>Colour tone</b> tints grass and surroundings dry, lush or autumnal. The option is on by default.</p>
 <h3>Properties</h3>

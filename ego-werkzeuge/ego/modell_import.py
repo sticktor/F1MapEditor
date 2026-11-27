@@ -37,6 +37,7 @@ import base64
 import hashlib
 import io
 import json
+import math
 import os
 import re
 import struct
@@ -45,7 +46,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
-from . import erp, grafik
+from . import animation as _anim, erp, grafik
 
 # --------------------------------------------------------------------------- Konstanten (aus den Originalen)
 PUFFER_CODE_FLOAT = 39      # float32-Ströme (Stride 12/16)
@@ -74,6 +75,18 @@ NORMALEN_KONVENTION_SPIEL = "dx"
 # drei Karten wie ``object_opaque``, dazu ``me_alphaThreshold``/``me_shadowAlphaThreshold`` (``object_alpha``
 # außerdem ``me_energyConservingTransparency``); ihre Zeichnungen tragen Flag 0 statt 1.
 SHADER_ALPHA = {"BLEND": "object_alpha.nefx2", "MASK": "object_mask.nefx2"}
+#: A3 (18.11.2026, docs/animationen.md): Materialien mit eingebauter Bewegung, als Kopie einer Vorlage des Trägers.
+#: ``wasser`` = laufende Normalenschichten (water), ``lauftext`` = leuchtende, laufende Textur (lights_scrolling,
+#: z. B. LED-Band), ``fahne`` = wehendes Tuch mit laufender Textur und Wellen (object_flag). Wasser und Fahne brauchen
+#: im Mesh einen Farbstrom COLOR0 wie alle ihre Spielmodelle (Vorgabe ohne glTF-Farben aus dem Spielbestand).
+EFFEKT_SHADER = {"wasser": "water.nefx2", "lauftext": "lights_scrolling.nefx2", "fahne": "object_flag.nefx2"}
+EFFEKT_FARBE = {"wasser": (0.85, 0.6, 0.0, 0.0), "fahne": (0.32, 0.18, 0.29, 0.0)}
+#: glTF-Extras eines Materials (Blender: benutzerdefinierte Eigenschaft ``f1_effect``) → Effektart
+GLTF_EFFEKT = {"water": "wasser", "scroll": "lauftext", "flag": "fahne"}
+#: Standardwerte der Effekte (Spielbestand: Lauftext 0,05–0,1 und Leuchtstärke 250–40.000, alle Fahnen ``me_USpeed`` ≈ 0,3)
+EFFEKT_STANDARD = {"lauftext": {"u": 0.1, "v": 0.0, "helligkeit": 250.0}, "fahne": {"u": 0.3},
+                   "wasser": {"tempo": 1.0}}
+PUFFER_CODE_FARBE, FORMAT_FARBE, VERWENDUNG_FARBE = 14, 14, 6     # COLOR0: R8G8B8A8 UNORM, Stride 4
 VORLAGE_ART = {"BLEND": "alpha", "MASK": "mask"}
 TEXTUR_FLAGS = 264
 SRV_ART = 5
@@ -101,6 +114,7 @@ class Teil:
     uv0: Optional[np.ndarray] = None        # (N, 2), v nach unten (0 = oberer Bildrand) wie glTF und Spiel
     uv1: Optional[np.ndarray] = None        # (N, 2) Lichtkarten-UV 0…1
     farben: Optional[np.ndarray] = None     # (N, 4) 0…1 (wird im Vier-Strom-Layout nicht geschrieben)
+    knoten: Optional[str] = None            # bewegter Knoten (Szene.animation), an dem das Teil hängt; None = fest
 
 
 @dataclass
@@ -117,6 +131,7 @@ class QuellMaterial:
     rauheit: float = 1.0                           # glTF roughnessFactor
     bild_verdeckung: Optional[np.ndarray] = None   # glTF occlusionTexture (Kanal R); oft dasselbe Bild wie bild_orm
     verdeckung_staerke: float = 1.0                # glTF occlusionTexture.strength
+    effekt: Optional[dict] = None                  # A3: {"art": wasser|lauftext|fahne, …} aus den glTF-Extras
 
 
 @dataclass
@@ -125,6 +140,7 @@ class Szene:
     materialien: Dict[str, QuellMaterial] = field(default_factory=dict)
     hinweise: List[str] = field(default_factory=list)
     quelle: str = ""
+    animation: Optional["_anim.Animation"] = None   # Knotenanimation (A1); Teile bleiben in der Ruhelage im Modellraum
 
     def grenzen(self) -> Tuple[np.ndarray, np.ndarray]:
         p = np.concatenate([t.positionen for t in self.teile])
@@ -209,6 +225,27 @@ class _Gltf:
         return _bild_rgba(daten)
 
 
+def _gltf_effekt(extras: dict, name: str, hinweise: List[str]) -> Optional[dict]:
+    """A3: Effekt eines Materials aus seinen glTF-Extras (Blender: benutzerdefinierte Eigenschaften des Materials,
+    Export mit *Include → Custom Properties*): ``f1_effect`` = water|scroll|flag, dazu optional ``f1_speed_u``,
+    ``f1_speed_v``, ``f1_brightness`` (Lauftext) und ``f1_speed`` (Faktor für Wasser)."""
+    roh = extras.get("f1_effect")
+    if not roh:
+        return None
+    art = GLTF_EFFEKT.get(str(roh).strip().lower())
+    if art is None:
+        hinweise.append("Material %s: unknown effect %s (water, scroll or flag)" % (name, roh))
+        return None
+    e = {"art": art}
+    for schluessel, feld in (("f1_speed_u", "u"), ("f1_speed_v", "v"), ("f1_brightness", "helligkeit"), ("f1_speed", "tempo")):
+        if schluessel in extras:
+            try:
+                e[feld] = float(extras[schluessel])
+            except (TypeError, ValueError):
+                hinweise.append("Material %s: %s must be a number" % (name, schluessel))
+    return e
+
+
 def _knotenmatrix(k: dict) -> np.ndarray:
     if "matrix" in k:
         return np.array(k["matrix"], float).reshape(4, 4).T        # glTF speichert spaltenweise
@@ -226,8 +263,6 @@ def _gltf_szene(g: _Gltf, quelle: str) -> Szene:
         raise ModellImportFehler("glTF: only version 2.0 is supported")
     if j.get("skins"):
         sz.hinweise.append("Skinning is ignored (static objects only)")
-    if j.get("animations"):
-        sz.hinweise.append("Animations are ignored")
     namen = []
     for i, m in enumerate(j.get("materials", [])):
         name = m.get("name") or "material_%d" % i
@@ -249,17 +284,33 @@ def _gltf_szene(g: _Gltf, quelle: str) -> Szene:
             alpha_schwelle=float(m.get("alphaCutoff", 0.5)),
             # glTF-Standard: fehlende Faktoren sind 1 (Blender schreibt sie nur, wenn sie davon abweichen)
             metall=float(pbr.get("metallicFactor", 1.0)), rauheit=float(pbr.get("roughnessFactor", 1.0)),
-            bild_verdeckung=g.bild(verdeckung), verdeckung_staerke=float((verdeckung or {}).get("strength", 1.0)))
+            bild_verdeckung=g.bild(verdeckung), verdeckung_staerke=float((verdeckung or {}).get("strength", 1.0)),
+            effekt=_gltf_effekt(m.get("extras") or {}, name, sz.hinweise))
     wurzeln = j.get("scenes", [{}])[j.get("scene", 0)].get("nodes") if j.get("scenes") else None
     if wurzeln is None:
         kinder = {c for k in j.get("nodes", []) for c in k.get("children", [])}
         wurzeln = [i for i in range(len(j.get("nodes", []))) if i not in kinder]
-    stapel = [(n, np.eye(4)) for n in wurzeln]
+    kanaele, anim_name = _gltf_kanaele(g, sz)
+    knotennamen: Dict[int, str] = {}
+    for nr in sorted(kanaele):
+        n = _anim.clipname(j["nodes"][nr].get("name") or "node%d" % nr)
+        while n in knotennamen.values():
+            n += "_"
+        knotennamen[nr] = n
+    bewegt = []                       # (Knoten, bewegter Vorfahr, Welt des glTF-Elternknotens, Welt in Ruhe)
+    welt_ruhe: Dict[int, np.ndarray] = {}
+    stapel = [(n, np.eye(4), None) for n in wurzeln]
     while stapel:
-        nr, eltern = stapel.pop(0)
+        nr, eltern, anker = stapel.pop(0)
         k = j["nodes"][nr]
         welt = eltern @ _knotenmatrix(k)
-        stapel += [(c, welt) for c in k.get("children", [])]
+        if nr in kanaele:
+            bewegt.append((nr, anker, eltern, welt))
+            welt_ruhe[nr] = welt
+            anker_selbst = nr
+        else:
+            anker_selbst = anker
+        stapel += [(c, welt, anker_selbst) for c in k.get("children", [])]
         if "mesh" not in k:
             continue
         mesh = j["meshes"][k["mesh"]]
@@ -299,10 +350,129 @@ def _gltf_szene(g: _Gltf, quelle: str) -> Szene:
                 farbe = np.concatenate([farbe, np.ones((len(farbe), 1))], axis=1)
             sz.teile.append(Teil("%s_%d" % (k.get("name") or mesh.get("name") or "mesh%d" % k["mesh"], pi), mat, pos, tri,
                                  nrm, tan, g.zugriff(at["TEXCOORD_0"])[:, :2] if "TEXCOORD_0" in at else None,
-                                 g.zugriff(at["TEXCOORD_1"])[:, :2] if "TEXCOORD_1" in at else None, farbe))
+                                 g.zugriff(at["TEXCOORD_1"])[:, :2] if "TEXCOORD_1" in at else None, farbe,
+                                 knotennamen.get(anker_selbst) if anker_selbst is not None else None))
     if not sz.teile:
         raise ModellImportFehler("glTF: no triangles found")
+    if bewegt:
+        sz.animation = _gltf_animation(j, kanaele, anim_name, knotennamen, bewegt, welt_ruhe, sz.hinweise)
+        if sz.animation is None:
+            for t in sz.teile:
+                t.knoten = None
     return sz
+
+
+#: Abtastung der glTF-Animation (A1): Bildraster der 16-Bit-Drehung, Bildrate für CUBICSPLINE, größter Drehschritt
+#: zwischen zwei Schlüsseln, Toleranz „Kanal fest“
+ANIM_BILDRATE = _anim.BILDRATE
+ANIM_KUBISCH_HZ = 30.0
+ANIM_MAX_DREHSCHRITT_GRAD = 30.0
+ANIM_TOLERANZ = 1e-5
+
+
+def _gltf_kanaele(g: "_Gltf", sz: "Szene") -> Tuple[Dict[int, Dict[str, Tuple[np.ndarray, np.ndarray, str]]], str]:
+    """Kanäle der ersten glTF-Animation je Knoten: ({Knoten: {Pfad: (Zeiten, Werte, Interpolation)}}, Name)."""
+    j = g.j
+    anims = j.get("animations") or []
+    if not anims:
+        return {}, ""
+    a = anims[0]
+    name = a.get("name") or "loop"
+    if len(anims) > 1:
+        sz.hinweise.append("Only the first animation (%s) is used, %d more are ignored" % (name, len(anims) - 1))
+    kanaele: Dict[int, Dict[str, Tuple[np.ndarray, np.ndarray, str]]] = {}
+    morph = False
+    for c in a.get("channels", []):
+        ziel = c.get("target", {})
+        pfad, nr = ziel.get("path"), ziel.get("node")
+        if pfad == "weights":
+            morph = True
+            continue
+        if nr is None or pfad not in ("translation", "rotation", "scale"):
+            continue
+        s = a["samplers"][c["sampler"]]
+        zeiten = g.zugriff(s["input"])[:, 0]
+        werte = g.zugriff(s["output"])
+        interp = s.get("interpolation", "LINEAR")
+        if interp not in ("LINEAR", "STEP", "CUBICSPLINE"):
+            raise ModellImportFehler("glTF: unknown interpolation %s" % interp)
+        if len(zeiten) == 0 or len(werte) != len(zeiten) * (3 if interp == "CUBICSPLINE" else 1):
+            raise ModellImportFehler("glTF: animation sampler with mismatching key counts")
+        kanaele.setdefault(nr, {})[pfad] = (zeiten, werte, interp)
+    if morph:
+        sz.hinweise.append("Morph target animation is ignored")
+    return kanaele, name
+
+
+def _gltf_animation(j, kanaele, anim_name, knotennamen, bewegt, welt_ruhe, hinweise) -> Optional["_anim.Animation"]:
+    """Kurven der bewegten Knoten im Spielformat: lokal zum nächsten bewegten Vorfahren (feste Zwischenknoten
+    eingerechnet), Zeiten ab 0 auf dem Bildraster von 60 Hz, Drehschritte höchstens ``ANIM_MAX_DREHSCHRITT_GRAD``."""
+    alle = np.concatenate([z for kn in kanaele.values() for (z, _, _) in kn.values()])
+    t0, t1 = float(alle.min()), float(alle.max())
+    laenge = t1 - t0
+    if laenge <= 0:
+        hinweise.append("Animation %s has no duration and is ignored" % anim_name)
+        return None
+    if laenge > 0xFFFF / ANIM_BILDRATE:
+        raise ModellImportFehler("Animation %s is %.0f s long (at most %.0f s)" % (anim_name, laenge, 0xFFFF / ANIM_BILDRATE))
+    animation = _anim.Animation(_anim.clipname(anim_name), round(laenge * ANIM_BILDRATE) / ANIM_BILDRATE)
+
+    def raster(x):
+        return np.unique(np.round((np.asarray(x, float) - t0) * ANIM_BILDRATE)) / ANIM_BILDRATE
+
+    for nr, anker, eltern_welt, welt in bewegt:
+        k = j["nodes"][nr]
+        if "matrix" in k:
+            t_r, q_r, s_r = _anim.matrix_zerlegen(_knotenmatrix(k))
+        else:
+            t_r = np.array(k.get("translation", (0, 0, 0)), float)
+            q_r = np.array(k.get("rotation", (0, 0, 0, 1)), float)
+            s_r = np.array(k.get("scale", (1, 1, 1)), float)
+        basis = np.linalg.inv(welt_ruhe[anker]) @ eltern_welt if anker is not None else eltern_welt
+        kn = kanaele[nr]
+        zeiten = [z for (z, _, _) in kn.values()]
+        for z, _, interp in kn.values():
+            if interp == "STEP" and len(z) > 1:
+                zeiten.append(np.asarray(z[1:]) - 1.0 / ANIM_BILDRATE)
+            elif interp == "CUBICSPLINE":
+                zeiten.append(np.arange(z[0], z[-1], 1.0 / ANIM_KUBISCH_HZ))
+        zeiten.append(np.array([t0, t1]))
+        tz = raster(np.concatenate(zeiten))
+        tz = tz[(tz >= 0) & (tz <= animation.laenge_s + 1e-9)]
+
+        def lokal(t, kn=kn, basis=basis, t_r=t_r, q_r=q_r, s_r=s_r):
+            tt = t + t0
+            tr = _anim.kanal_wert(*kn["translation"], tt, False) if "translation" in kn else t_r
+            q = _anim.kanal_wert(*kn["rotation"], tt, True) if "rotation" in kn else q_r
+            sc = _anim.kanal_wert(*kn["scale"], tt, False) if "scale" in kn else s_r
+            return _anim.matrix_zerlegen(basis @ grafik.trs_matrix(tr, q, sc))
+
+        proben = [(float(t), lokal(float(t))) for t in tz]
+        # große Drehschritte unterteilen (das Spiel interpoliert zwischen zwei Schlüsseln, glTF per slerp)
+        i = 0
+        while i < len(proben) - 1:
+            (ta, (_, qa, _)), (tb, (_, qb, _)) = proben[i], proben[i + 1]
+            winkel = 2 * math.degrees(math.acos(min(1.0, abs(float(np.dot(qa, qb))))))
+            tm = round((ta + tb) / 2 * ANIM_BILDRATE) / ANIM_BILDRATE
+            if winkel > ANIM_MAX_DREHSCHRITT_GRAD and ta < tm < tb:
+                proben.insert(i + 1, (tm, lokal(tm)))
+            else:
+                i += 1
+        tz = np.array([p[0] for p in proben])
+        T = np.array([p[1][0] for p in proben])
+        Q = _anim.quaternionen_glaetten(np.array([p[1][1] for p in proben]))
+        S = np.array([p[1][2] for p in proben])
+        ruhe_t, ruhe_q, ruhe_s = _anim.matrix_zerlegen(basis @ grafik.trs_matrix(t_r, q_r, s_r))
+        if np.any(S <= 0):
+            hinweise.append("Animation %s: negative scale of %s is not supported" % (anim_name, knotennamen[nr]))
+        kurve = _anim.Knotenkurve(
+            verschiebung=None if np.abs(T - ruhe_t[None, :]).max() < ANIM_TOLERANZ else (tz, T),
+            drehung=None if np.abs(np.abs(Q @ ruhe_q) - 1).max() < ANIM_TOLERANZ else (tz, Q),
+            skalierung=None if np.abs(S - ruhe_s[None, :]).max() < ANIM_TOLERANZ else (tz, S),
+            ruhe_t=tuple(map(float, ruhe_t)), ruhe_r=tuple(map(float, ruhe_q)), ruhe_s=tuple(map(float, ruhe_s)))
+        animation.knoten.append(_anim.AnimKnoten(knotennamen[nr], knotennamen[anker] if anker is not None else None,
+                                                 welt, kurve))
+    return animation
 
 
 def glb_lesen(pfad) -> Szene:
@@ -573,12 +743,14 @@ def _teil_aufbereiten(t: Teil, hinweise: List[str]) -> Teil:
                 t.name, np.abs(uv).max()))
     tan = tangenten_berechnen(pos, nrm, uv, tri) if t.tangenten is None else np.asarray(t.tangenten, np.float64)
     uv1 = np.tile(LICHT_UV_STANDARD, (len(pos), 1)) if t.uv1 is None else np.clip(np.asarray(t.uv1, np.float64), 0.0, 1.0)
+    farben = None if t.farben is None else np.clip(np.asarray(t.farben, np.float64).reshape(len(pos), -1)[:, :4], 0.0, 1.0)
     # nur benutzte Vertices behalten
     benutzt, lokal = np.unique(tri, return_inverse=True)
     if len(benutzt) != len(pos):
         pos, nrm, uv, tan, uv1 = pos[benutzt], nrm[benutzt], uv[benutzt], tan[benutzt], uv1[benutzt]
+        farben = None if farben is None else farben[benutzt]
         tri = lokal.reshape(-1, 3)
-    return Teil(t.name, t.material, pos, tri, nrm, tan, uv, uv1)
+    return Teil(t.name, t.material, pos, tri, nrm, tan, uv, uv1, farben, knoten=t.knoten)
 
 
 def _raeumlich_sortiert(tri: np.ndarray, pos: np.ndarray) -> np.ndarray:
@@ -633,7 +805,35 @@ def _doppelseitig(t: Teil) -> Teil:
     tan[:, 3] *= -1.0
     return Teil(t.name, t.material, np.concatenate([t.positionen, t.positionen]),
                 np.concatenate([t.dreiecke, t.dreiecke[:, ::-1] + n]), np.concatenate([t.normalen, -t.normalen]),
-                np.concatenate([t.tangenten, tan]), np.concatenate([t.uv0, t.uv0]), np.concatenate([t.uv1, t.uv1]))
+                np.concatenate([t.tangenten, tan]), np.concatenate([t.uv0, t.uv0]), np.concatenate([t.uv1, t.uv1]),
+                None if t.farben is None else np.concatenate([t.farben, t.farben]), knoten=t.knoten)
+
+
+def _in_knotenraum(teile: Sequence[Teil], anim: "_anim.Animation") -> List[Teil]:
+    """Teile bewegter Knoten aus der Ruhelage im Modellraum in den Raum ihres Knotens rechnen (A1)."""
+    import dataclasses
+    inv = {k.name: np.linalg.inv(k.welt_ruhe) for k in anim.knoten}
+    aus = []
+    for t in teile:
+        if t.knoten is None:
+            aus.append(t)
+            continue
+        if t.knoten not in inv:
+            raise ModellImportFehler("Moving part %s is missing in the animation of LOD 0" % t.knoten)
+        m = inv[t.knoten]
+        lin = m[:3, :3]
+        pos = np.asarray(t.positionen, np.float64) @ lin.T + m[:3, 3]
+        nrm = tan = None
+        if t.normalen is not None:
+            nrm = np.asarray(t.normalen, np.float64) @ np.linalg.inv(lin)
+            nrm /= np.maximum(np.linalg.norm(nrm, axis=1, keepdims=True), 1e-12)
+        if t.tangenten is not None:
+            t4 = np.asarray(t.tangenten, np.float64)
+            txyz = t4[:, :3] @ lin.T
+            txyz /= np.maximum(np.linalg.norm(txyz, axis=1, keepdims=True), 1e-12)
+            tan = np.concatenate([txyz, t4[:, 3:4]], axis=1)
+        aus.append(dataclasses.replace(t, positionen=pos, normalen=nrm, tangenten=tan))
+    return aus
 
 
 # --------------------------------------------------------------------------- Ressourcen
@@ -693,7 +893,7 @@ def lod_abstaende_vorschlag(lods: int, sichtweite_m: float) -> Tuple[float, ...]
 def modell_bauen(szenen, basis: str, materialien: Optional[Dict[str, str]] = None, *, sichtweite_m: float = 2500.0,
                  lod_abstaende: Optional[Sequence[float]] = None, opak: Optional[Dict[str, bool]] = None,
                  mit_bindung: bool = True, streng: bool = True, slotnamen: Optional[Dict[str, str]] = None,
-                 doppelseitig: Optional[Dict[str, bool]] = None) -> Bau:
+                 doppelseitig: Optional[Dict[str, bool]] = None, farbstrom: Optional[Dict[str, Sequence[float]]] = None) -> Bau:
     """Erzeugt GfxModelRes, ModelProxyRes, je LOD ein GfxMeshRes, vier Vertexpuffer, einen Indexpuffer und die
     Materialbindung ``<modell>.emb?context=default``.
 
@@ -702,7 +902,8 @@ def modell_bauen(szenen, basis: str, materialien: Optional[Dict[str, str]] = Non
     erzeugt). ``opak``: Quellmaterial → False für Alpha-/Maskenmaterial (Zeichnungs-Flag 0 statt 1).
     ``slotnamen``: Quellmaterial → Name des Materialslots (Standard ``01``, ``02`` … wie bei den meisten
     Originalen), z. B. um die Slots einer vorhandenen Bindung zu treffen. ``doppelseitig``: Quellmaterial → True
-    ergänzt die Rückseiten als Geometrie (doppelte Dreieckszahl, ``_doppelseitig``)."""
+    ergänzt die Rückseiten als Geometrie (doppelte Dreieckszahl, ``_doppelseitig``). ``farbstrom``: Quellmaterial →
+    RGBA-Vorgabe; diese Materialien bekommen den fünften Strom COLOR0 (glTF ``COLOR_0`` oder die Vorgabe, A3)."""
     if isinstance(szenen, Szene):
         szenen = [szenen]
     if not basis.startswith("eaid://") or not basis.endswith(".idf"):
@@ -711,7 +912,11 @@ def modell_bauen(szenen, basis: str, materialien: Optional[Dict[str, str]] = Non
     hinweise: List[str] = []
     for s in szenen:
         hinweise += s.hinweise
-    lods = [[_teil_aufbereiten(t, hinweise) for t in s.teile] for s in szenen]
+    anim = szenen[0].animation if szenen[0].animation is not None and szenen[0].animation.knoten else None
+    if anim is not None:     # A1: Teile bewegter Knoten in deren Raum, der Knotenbaum trägt die Ruhelage
+        lods = [[_teil_aufbereiten(t, hinweise) for t in _in_knotenraum(s.teile, anim)] for s in szenen]
+    else:
+        lods = [[_teil_aufbereiten(t, hinweise) for t in s.teile] for s in szenen]
     if doppelseitig:
         lods = [[_doppelseitig(t) if doppelseitig.get(t.material) else t for t in teile] for teile in lods]
     n0 = sum(len(t.dreiecke) for t in lods[0])
@@ -738,19 +943,51 @@ def modell_bauen(szenen, basis: str, materialien: Optional[Dict[str, str]] = Non
     if fehlend and mit_bindung:
         raise ModellImportFehler("No game materials for: %s" % ", ".join(fehlend))
     opak = opak or {}
+    # Modellknoten (Originale: <name>, <name>_x1, <name>_x2 … je LOD; bewegte Teile wie das Riesenrad: bewegter Knoten
+    # <name>_<knoten> mit einem Geometrieknoten <name>_<knoten>_x<lod> je LOD darunter)
+    knoten = [grafik.ModellKnoten("Scene Root", -1, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0), (1.0, 1.0, 1.0), EINHEIT, 0, 0)]
+    knoten_von: Dict[Tuple[Optional[str], int], int] = {}
+    for li in range(len(lods)):
+        if anim is None or any(t.knoten is None for t in lods[li]):
+            knoten_von[(None, li)] = len(knoten)
+            knoten.append(grafik.ModellKnoten(name if li == 0 else "%s_x%d" % (name, li), 0, (0.0, 0.0, 0.0),
+                                              (0.0, 0.0, 0.0, 1.0), (1.0, 1.0, 1.0), EINHEIT, 1, len(knoten)))
+    gruppen: List[Optional[str]] = [None]
+    anim_index: Dict[str, int] = {}
+    if anim is not None:
+        for k in anim.knoten:
+            kn = "%s_%s" % (name, k.name)
+            anim_index[k.name] = len(knoten)
+            knoten.append(grafik.ModellKnoten(kn, anim_index[k.eltern] if k.eltern else 0, tuple(k.kurve.ruhe_t),
+                                              tuple(k.kurve.ruhe_r), tuple(k.kurve.ruhe_s), EINHEIT, 0, len(knoten)))
+            gruppen.append(k.name)
+            for li in range(len(lods)):
+                if any(t.knoten == k.name for t in lods[li]):
+                    knoten_von[(k.name, li)] = len(knoten)
+                    knoten.append(grafik.ModellKnoten("%s_x%d" % (kn, li), anim_index[k.name], (0.0, 0.0, 0.0),
+                                                      (0.0, 0.0, 0.0, 1.0), (1.0, 1.0, 1.0), EINHEIT, 1, len(knoten)))
     # Vertexpool und Indizes
-    pos_l, nrm_l, tan_l, uv_l, ind_l = [], [], [], [], []
+    farbstrom = {m: tuple(float(x) for x in c) for m, c in (farbstrom or {}).items() if m in reihenfolge}
+    pos_l, nrm_l, tan_l, uv_l, ind_l, farb_l = [], [], [], [], [], []
+    gruppen_pos: Dict[Optional[str], List[np.ndarray]] = {}
     v_off = i_off = 0
     meshes: List[grafik.GfxMesh] = []
     for li, teile in enumerate(lods):
         mesh = grafik.GfxMesh(lod=li)
-        mesh.vb_kennungen = [grafik.vb_kennung(basis, k) for k in range(4)]
+        mesh.vb_kennungen = [grafik.vb_kennung(basis, k) for k in range(5 if farbstrom else 4)]
         mesh.ib_kennungen = [grafik.ib_kennung(basis, 0)]
         mesh.elemente = [grafik.VertexElement(0, 0, 1, 0, FORMAT_F32X3), grafik.VertexElement(1, 0, 2, 0, FORMAT_HALB4),
                          grafik.VertexElement(2, 0, 3, 0, FORMAT_HALB4), grafik.VertexElement(3, 0, 5, 0, FORMAT_HALB4)]
         mesh.strom_tabelle = [(1, 0), (1, 1), (1, 2), (1, 3)]
-        for m in reihenfolge:
-            gruppe = [t for t in teile if t.material == m]
+        if farbstrom:
+            mesh.elemente.append(grafik.VertexElement(4, 0, VERWENDUNG_FARBE, 0, FORMAT_FARBE))
+            mesh.strom_tabelle.append((1, 4))
+        for g in gruppen:
+          if (g, li) not in knoten_von:
+            continue
+          ki, erste = knoten_von[(g, li)], len(mesh.zeichnungen)
+          for m in reihenfolge:
+            gruppe = [t for t in teile if t.material == m and t.knoten == g]
             if not gruppe:
                 continue
             if slot_von[m] not in mesh.materialnamen:
@@ -765,21 +1002,30 @@ def modell_bauen(szenen, basis: str, materialien: Optional[Dict[str, str]] = Non
             n = np.concatenate([t.normalen for t in gruppe])
             tg = np.concatenate([t.tangenten for t in gruppe])
             uv = np.concatenate([np.concatenate([t.uv0, t.uv1], axis=1) for t in gruppe])
+            if farbstrom:
+                vorgabe = farbstrom.get(m, (0.0, 0.0, 0.0, 0.0))
+                fb = np.concatenate([np.tile(vorgabe, (len(t.positionen), 1)) if t.farben is None or m not in farbstrom
+                                     else np.asarray(t.farben, np.float64) for t in gruppe])
             for benutzt, tri in _stuecke(np.concatenate(tri_alle), len(p), pos=p):
                 pp = p[benutzt].astype(np.float32)
                 pos_l.append(pp)
+                gruppen_pos.setdefault(g, []).append(pp)
                 nrm_l.append(np.concatenate([n[benutzt], np.zeros((len(benutzt), 1))], axis=1))
                 tan_l.append(tg[benutzt])
                 uv_l.append(uv[benutzt])
                 ind_l.append(tri.astype("<u2").ravel())
+                if farbstrom:
+                    farb_l.append(np.round(np.clip(fb[benutzt], 0, 1) * 255).astype(np.uint8))
                 ti = len(mesh.teilnetze)
-                mesh.eintraege.append((1 + li, ti))
-                mesh.teilnetze.append(grafik.Teilnetz(4, grafik.TOPOLOGIE_DREIECKSLISTE, 2, i_off, int(tri.size), v_off,
-                                                      huellkugel(pp), 8 * ti, 1, mi, 0, [0, 1, 2, 3, 0, 0, 0, 0]))
+                mesh.eintraege.append((ki, ti))
+                stroeme = 5 if m in farbstrom else 4
+                mesh.teilnetze.append(grafik.Teilnetz(stroeme, grafik.TOPOLOGIE_DREIECKSLISTE, 2, i_off, int(tri.size), v_off,
+                                                      huellkugel(pp), 8 * ti, 1, mi, 0,
+                                                      [0, 1, 2, 3, 4 if stroeme == 5 else 0, 0, 0, 0]))
                 mesh.zeichnungen.append(grafik.Zeichnung(1 if opak.get(m, True) else 0, ti, i_off, int(tri.size)))
                 v_off += len(benutzt)
                 i_off += int(tri.size)
-        mesh.knoten = [grafik.MeshKnoten(EINHEIT, 0, 1 + li, 0, 0, len(mesh.zeichnungen), 0, 0)]
+          mesh.knoten.append(grafik.MeshKnoten(EINHEIT, 0, ki, 0, erste, len(mesh.zeichnungen) - erste, 0, 0))
         fehler = mesh.pruefen()
         if fehler:
             raise ModellImportFehler("Mesh LOD %d is invalid: %s" % (li, fehler))
@@ -795,15 +1041,26 @@ def modell_bauen(szenen, basis: str, materialien: Optional[Dict[str, str]] = Non
                     np.concatenate(uv_l).astype("<f2").tobytes()),
         _puffer_res(grafik.ib_kennung(basis, 0), grafik.PUFFER_INDEX, 2, PUFFER_CODE_INDEX, np.concatenate(ind_l).tobytes()),
     ]
+    if farbstrom:
+        res.insert(4, _puffer_res(grafik.vb_kennung(basis, 4), grafik.PUFFER_VERTEX, 4, PUFFER_CODE_FARBE,
+                                  np.concatenate(farb_l).tobytes()))
     for li, mesh in enumerate(meshes):
         res.append(_res(grafik.mesh_kennung(basis, li), "GfxMeshRes", mesh.to_bytes()))
-    # Modell: Wurzel + ein Knoten je LOD (Originale: <name>, <name>_x1, <name>_x2 …)
-    knoten = [grafik.ModellKnoten("Scene Root", -1, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0), (1.0, 1.0, 1.0), EINHEIT, 0, 0)]
-    for li in range(len(lods)):
-        knoten.append(grafik.ModellKnoten(name if li == 0 else "%s_x%d" % (name, li), 0, (0.0, 0.0, 0.0),
-                                          (0.0, 0.0, 0.0, 1.0), (1.0, 1.0, 1.0), EINHEIT, 1, 1 + li))
     p0 = pos[:sum(len(x) for x in pos_l[:len(meshes[0].teilnetze)])]
     alle = pos                                   # AABB und Kugel über alle LODs: nie zu klein
+    if anim is not None:                         # bewegte Teile: Ecken ihrer AABB über die ganze Bewegung
+        punkte = [np.concatenate(gruppen_pos[None]).astype(np.float64)] if None in gruppen_pos else []
+        ecken = {}
+        for g, arrs in gruppen_pos.items():
+            if g is not None:
+                q = np.concatenate(arrs).astype(np.float64)
+                lo, hi = q.min(0), q.max(0)
+                ecken[g] = np.array([[x, y, z] for x in (lo[0], hi[0]) for y in (lo[1], hi[1]) for z in (lo[2], hi[2])])
+        for zeit in anim.zeitpunkte():
+            welt = anim.weltmatrizen(float(zeit))
+            for g, e in ecken.items():
+                punkte.append(e @ welt[g][:3, :3].T + welt[g][:3, 3])
+        alle = np.concatenate(punkte).astype(np.float32)
     aabb = (tuple(float(x) for x in alle.min(0)), tuple(float(x) for x in alle.max(0)))
     kugel = huellkugel(alle)
     abst = tuple(float(x) for x in (lod_abstaende if lod_abstaende is not None
@@ -815,6 +1072,11 @@ def modell_bauen(szenen, basis: str, materialien: Optional[Dict[str, str]] = Non
                               aabb_min=aabb[0], aabb_max=aabb[1], lod_abstaende=abst, lod_wert=2, knoten=knoten)
     res.append(_res(grafik.modell_kennung(basis), "GfxModelRes", modell.to_bytes()))
     res.append(_res(grafik.proxy_kennung(basis), "ModelProxyRes", grafik.ModellProxy.aus_modell(modell).to_bytes()))
+    clip = None
+    if anim is not None:
+        clip_res, clip = _anim.clip_ressourcen(basis, anim.name, {"%s_%s" % (name, k.name): k.kurve for k in anim.knoten},
+                                               anim.laenge_s)
+        res += clip_res
     bindung = {slot_von[m]: materialien[m] for m in reihenfolge if m in materialien}
     if mit_bindung:
         mats = []
@@ -829,6 +1091,10 @@ def modell_bauen(szenen, basis: str, materialien: Optional[Dict[str, str]] = Non
                "materialslots": {slot_von[m]: m for m in reihenfolge}, "aabb_min": list(aabb[0]), "aabb_max": list(aabb[1]),
                "kugel": list(kugel), "lod_abstaende": list(abst), "ressourcen": len(res),
                "bytes": int(sum(len(f[1]) for r in res for f in r.fragmente))}
+    if anim is not None:
+        bericht["animation"] = {"clip": clip, "name": anim.name, "laenge_s": round(float(anim.laenge_s), 4),
+                                "knoten": len(anim.knoten), "schluessel": anim.schluessel(),
+                                "bewegte_teile": int(sum(1 for x in lods[0] if x.knoten is not None))}
     return Bau(basis, res, {slot_von[m]: m for m in reihenfolge}, bindung, aabb, kugel, lods, bericht, hinweise)
 
 
@@ -1040,6 +1306,43 @@ def vorlagen_alpha(quelle) -> Tuple[Dict[str, str], Dict[str, bytes]]:
     return kennungen, roh
 
 
+def vorlagen_effekte(quelle) -> Tuple[Dict[str, str], Dict[str, bytes]]:
+    """A3: Vorlagen der Bewegungsmaterialien aus dem Träger: ({``wasser``/``lauftext``/``fahne``: Kennung}, {…: Bytes}).
+    Je Shader das Material mit den wenigsten Parametern und verschiedenen Texturen in allen Slots (dann nach Kennung,
+    unabhängig von der Reihenfolge im Archiv). Fehlt ein Shader, fehlt der Schlüssel (Material dann gewöhnlich, Hinweis)."""
+    idx = grafik._als_index(quelle)
+    kandidaten: Dict[str, List[Tuple[int, str]]] = {}
+    for r in idx.alle("GfxMaterialRes"):
+        try:
+            m = grafik.Material.aus_bytes(r.data())
+        except Exception:  # noqa: BLE001
+            continue
+        for art, shader in EFFEKT_SHADER.items():
+            tex = m.texturen()
+            if m.shader.endswith("/" + shader) and tex and len(set(tex.values())) == len(tex):
+                kandidaten.setdefault(art, []).append((len(m.parameter), r.identifier))
+    kennungen = {art: min(k)[1] for art, k in kandidaten.items()}
+    return kennungen, {art: idx.get(k).data() for art, k in kennungen.items()}
+
+
+def effekt_pruefen(e) -> dict:
+    """Effektangabe (``modelle.json`` → ``effekte`` oder glTF-Extras) prüfen und mit Standardwerten auffüllen."""
+    if isinstance(e, str):
+        e = {"art": e}
+    if not isinstance(e, dict) or e.get("art") not in EFFEKT_SHADER:
+        raise ModellImportFehler("Material effect must be wasser, lauftext or fahne (%r)" % (e,))
+    aus = dict(EFFEKT_STANDARD.get(e["art"], {}))
+    for k, v in e.items():
+        if k == "art":
+            continue
+        if k not in ("u", "v", "helligkeit", "tempo") or isinstance(v, bool) or not isinstance(v, (int, float)) \
+                or not math.isfinite(float(v)):
+            raise ModellImportFehler("Material effect: field %s must be u, v, helligkeit or tempo with a number" % k)
+        aus[k] = float(v)
+    aus["art"] = e["art"]
+    return aus
+
+
 def material_aus_vorlage(vorlage: bytes, kennung: str, texturen: Optional[Dict[str, str]] = None,
                          konstanten: Optional[Dict[str, Sequence[float]]] = None) -> Ressource:
     """Neues GfxMaterialRes als Kopie eines Spielmaterials (Shader, Parameter und Konstantenpuffer bleiben):
@@ -1085,7 +1388,7 @@ def vorlage_material_finden(quelle, shader: str = "object_opaque.nefx2", slots=(
 # --------------------------------------------------------------------------- Umsetzung in einem Schritt (M1)
 #: Version der Umsetzung; geht in den Schlüssel des Zwischenspeichers ein (strecke/eigene_modelle.py). Erhöhen, wenn
 #: sich die erzeugten Ressourcen bei gleicher Eingabe ändern.
-UMSETZUNG_VERSION = 2          # 2 = M5a (Transparenz, Maske, doppelseitig, Glanz/Metall)
+UMSETZUNG_VERSION = 4          # 2 = M5a (Transparenz, Maske, doppelseitig, Glanz/Metall), 3 = A1 (Animation), 4 = A3 (Effekte)
 #: Texturslots, die das Vorlagenmaterial haben muss (Shader ``object_opaque``)
 VORLAGE_SLOTS = ("me_diffuseMap", "me_normalMap", "me_surfaceMap")
 NAME_MUSTER = re.compile(r"[a-z][a-z0-9_]{0,47}")
@@ -1110,7 +1413,7 @@ class Umsetzung:
 def modell_umsetzen(szenen, name: str, wurzel: str, vorlage_material: bytes, *, sichtweite_m: float = 2500.0,
                     lod_abstaende: Optional[Sequence[float]] = None, textur_max: int = 1024,
                     textur_format: int = FORMAT_DIFFUS, normalen: str = "gl", streng: bool = True,
-                    vorlagen: Optional[Dict[str, bytes]] = None) -> Umsetzung:
+                    vorlagen: Optional[Dict[str, bytes]] = None, effekte: Optional[Dict[str, dict]] = None) -> Umsetzung:
     """Setzt eine Szene (oder eine Liste, LOD 0 zuerst) vollständig in Spielressourcen um.
 
     ``name``: Modellname (Kleinbuchstaben, Ziffern, ``_``; üblich ``usr_<name>``). ``wurzel``: Objektordner der
@@ -1127,7 +1430,11 @@ def modell_umsetzen(szenen, name: str, wurzel: str, vorlage_material: bytes, *, 
     nicht metallisch bleibt die neutrale Karte). ``alphaMode`` ``BLEND``/``MASK`` → Material als Kopie von
     ``vorlagen["alpha"]`` (Shader ``object_alpha``) bzw. ``vorlagen["mask"]`` (``object_mask``), Farbkarte mit Alpha
     in BC3 sRGB, ``alphaCutoff`` → ``me_alphaThreshold``, Zeichnungs-Flag 0. Fehlt die Vorlage, wird das Material
-    deckend gezeichnet (Hinweis). Doppelseitige Materialien bekommen ihre Rückseiten als Geometrie."""
+    deckend gezeichnet (Hinweis). Doppelseitige Materialien bekommen ihre Rückseiten als Geometrie.
+
+    A3: ``effekte`` = {Quellmaterial: {``art``: ``wasser``/``lauftext``/``fahne``, ``u``, ``v``, ``helligkeit``,
+    ``tempo``}} (sonst die glTF-Extras ``f1_effect`` …) → Kopie von ``vorlagen[art]`` (``vorlagen_effekte``) mit den
+    eigenen Karten und Geschwindigkeiten; Wasser und Fahne bekommen den Farbstrom COLOR0."""
     if isinstance(szenen, Szene):
         szenen = [szenen]
     if not NAME_MUSTER.fullmatch(name or ""):
@@ -1154,6 +1461,7 @@ def modell_umsetzen(szenen, name: str, wurzel: str, vorlage_material: bytes, *, 
     texturen, materialien, mat_bericht = [], {}, {}
     opak: Dict[str, bool] = {}
     doppelt: Dict[str, bool] = {}
+    farbstrom: Dict[str, Tuple[float, ...]] = {}
 
     def textur(nr: int, art: str, bild: np.ndarray, fmt: int, mat: str) -> str:
         h0, w0 = np.asarray(bild).shape[:2]
@@ -1173,6 +1481,27 @@ def modell_umsetzen(szenen, name: str, wurzel: str, vorlage_material: bytes, *, 
 
     for i, m in enumerate(reihenfolge):
         q = next((s.materialien[m] for s in szenen if m in s.materialien), QuellMaterial(m))
+        effekt = (effekte or {}).get(m) or q.effekt
+        if effekt:
+            effekt = effekt_pruefen(effekt)
+            roh_effekt = (vorlagen or {}).get(effekt["art"])
+            if roh_effekt is None:
+                hinweise.append("Material %s: the carrier has no %s material, the effect %s is left out" % (
+                    m, EFFEKT_SHADER[effekt["art"]].split(".")[0], effekt["art"]))
+            else:
+                kennung = "%s/materials/%s_%02d.material" % (wurzel, name, i + 1)
+                slots_e, konst_e = _effekt_material(effekt, q, roh_effekt, lambda art, bild, fmt, nr=i + 1, m=m:
+                                                    textur(nr, art, bild, fmt, m), neutral, normalen)
+                extra.append(material_aus_vorlage(roh_effekt, kennung, slots_e, konst_e))
+                materialien[m] = kennung
+                opak[m] = True
+                doppelt[m] = bool(q.doppelseitig)
+                if effekt["art"] in EFFEKT_FARBE:
+                    farbstrom[m] = EFFEKT_FARBE[effekt["art"]]
+                mat_bericht[m] = {"kennung": kennung, "art": effekt["art"], "effekt": effekt,
+                                  "doppelseitig": bool(q.doppelseitig),
+                                  "texturen": {s: k.rsplit("/", 1)[-1] for s, k in slots_e.items()}}
+                continue
         slots = dict(neutral)
         roh_alpha = (vorlagen or {}).get(VORLAGE_ART.get(q.alpha, ""))
         if q.bild_basisfarbe is not None and roh_alpha is None:      # mit Alpha-Vorlage entsteht unten die Karte _da
@@ -1214,7 +1543,7 @@ def modell_umsetzen(szenen, name: str, wurzel: str, vorlage_material: bytes, *, 
             mat_bericht[m]["alpha_schwelle"] = round(konstanten["me_alphaThreshold"][0], 4)
     basis = "%s/idf/%s.idf" % (wurzel, name)
     bau = modell_bauen(szenen, basis, materialien, sichtweite_m=sichtweite_m, lod_abstaende=lod_abstaende, streng=streng,
-                       opak=opak, doppelseitig=doppelt)
+                       opak=opak, doppelseitig=doppelt, farbstrom=farbstrom or None)
     ressourcen = bau.ressourcen + extra
     bericht = dict(bau.bericht)
     bericht.update(name=name, modell=basis[:-len(".idf")], materialien=mat_bericht, texturen=texturen,
@@ -1222,6 +1551,46 @@ def modell_umsetzen(szenen, name: str, wurzel: str, vorlage_material: bytes, *, 
                    textur_bytes=int(sum(t["bytes"] for t in texturen)), normalen=normalen, textur_max=int(textur_max),
                    version=UMSETZUNG_VERSION)
     return Umsetzung(name, basis, ressourcen, bericht, hinweise + bau.hinweise, bau)
+
+
+def _effekt_material(effekt: dict, q: QuellMaterial, roh: bytes, textur, neutral: Dict[str, str], normalen: str
+                     ) -> Tuple[Dict[str, str], Dict[str, Sequence[float]]]:
+    """Slots und Konstanten eines Bewegungsmaterials (A3). ``textur(art, bild, format)`` legt eine Textur an."""
+    vorhanden = grafik.Material.aus_bytes(roh).texturen()
+    konst = grafik.Material.aus_bytes(roh).konstanten()
+    slots: Dict[str, str] = {}
+    art = effekt["art"]
+    if art == "lauftext":          # leuchtende Karte = Farbbild (sonst weiß), Oberfläche neutral
+        bild = q.bild_basisfarbe if q.bild_basisfarbe is not None else np.full((NEUTRAL_KANTE, NEUTRAL_KANTE, 4), 255, np.uint8)
+        if q.bild_basisfarbe is None and tuple(q.basisfarbe[:3]) != (1.0, 1.0, 1.0):
+            bild = np.full((NEUTRAL_KANTE, NEUTRAL_KANTE, 4), [int(round(255 * min(1, max(0, c)))) for c in q.basisfarbe[:3]] + [255],
+                           np.uint8)
+        if "me_effectMap" in vorhanden:
+            slots["me_effectMap"] = textur("d", bild, FORMAT_DIFFUS)
+        if "me_surfaceMap" in vorhanden:
+            slots["me_surfaceMap"] = neutral["me_surfaceMap"]
+        return slots, {"me_USpeed": (effekt["u"],), "me_VSpeed": (effekt["v"],),
+                       "me_selfIlluminationLevel": (effekt["helligkeit"],)}
+    if art == "fahne":             # Farbbild mit Alpha (Maske 0,5 wie alle Spielfahnen), Normalen, Oberfläche neutral
+        slots["me_diffuseMap"] = textur("da", farbkarte_mit_alpha(q), FORMAT_DIFFUS_ALPHA)
+        slots["me_normalMap"] = (textur("n", normalenkarte_fuer_spiel(q.bild_normal, normalen), FORMAT_NORMAL)
+                                 if q.bild_normal is not None else neutral["me_normalMap"])
+        slots["me_surfaceMap"] = neutral["me_surfaceMap"]
+        k: Dict[str, Sequence[float]] = {"me_USpeed": (effekt["u"],)}
+        if "me_diffuseTint" in konst:
+            k["me_diffuseTint"] = tuple(float(min(1.0, max(0.0, x))) for x in q.basisfarbe[:3]) if q.bild_basisfarbe is None \
+                else (1.0, 1.0, 1.0)
+        if "v" in effekt and "me_VSpeed" in konst:
+            k["me_VSpeed"] = (effekt["v"],)
+        return {s: v for s, v in slots.items() if s in vorhanden}, k
+    # wasser: Karten der Vorlage, eigene Farb-/Normalenkarte, wenn vorhanden; Geschwindigkeiten × tempo
+    if q.bild_basisfarbe is not None and "me_diffuseMap" in vorhanden:
+        slots["me_diffuseMap"] = textur("d", q.bild_basisfarbe, FORMAT_DIFFUS)
+    if q.bild_normal is not None and "me_normalMap" in vorhanden:
+        slots["me_normalMap"] = textur("n", normalenkarte_fuer_spiel(q.bild_normal, normalen), FORMAT_NORMAL)
+    k = {n: (float(v[0]) * effekt.get("tempo", 1.0),) for n, v in konst.items()
+         if n.startswith("me_normalLayer") and n.endswith("Speed")}
+    return slots, k
 
 
 # --------------------------------------------------------------------------- Archiv
@@ -1288,8 +1657,9 @@ def pruefen(archiv: erp.ErpFile, bau: Bau, quelle=None) -> List[Tuple[str, bool,
     proxy = grafik.ModellProxy.aus_bytes(idx[grafik.proxy_kennung(basis)].data())
     ok("ModelProxyRes: Rundlauf, Knoten wie im Modell",
        proxy.to_bytes() == idx[grafik.proxy_kennung(basis)].data() and proxy.knoten == modell.knoten)
+    animiert = bau.bericht.get("animation")
     ok("Modell: LODs, Knoten, Abstände", modell.lod_anzahl == len(bau.lods) == len(modell.mesh_kennungen)
-       and len(modell.knoten) == 1 + len(bau.lods) and len(modell.lod_abstaende) == 2 * len(bau.lods) - 1
+       and (animiert or len(modell.knoten) == 1 + len(bau.lods)) and len(modell.lod_abstaende) == 2 * len(bau.lods) - 1
        and list(modell.lod_abstaende) == sorted(modell.lod_abstaende), str(modell.lod_abstaende))
     puffer_ok, mesh_ok, geo_ok, kugel_ok, index_ok, einzel = True, True, True, True, True, []
     alle_pos = []
@@ -1297,12 +1667,19 @@ def pruefen(archiv: erp.ErpFile, bau: Bau, quelle=None) -> List[Tuple[str, bool,
         roh = idx[mk].data()
         mesh = grafik.GfxMesh.aus_bytes(roh)
         mesh_ok &= mesh.to_bytes() == roh and not mesh.pruefen() and mesh.lod == li
-        mesh_ok &= all(e == (1 + li, i) for i, e in enumerate(mesh.eintraege)) and \
-            [k.modell_knoten for k in mesh.knoten] == [1 + li]
+        if animiert:     # Einträge und Mesh-Knoten zeigen auf Geometrieknoten, Zeichnungen lückenlos aufgeteilt
+            mesh_ok &= all(e[1] == i and modell.knoten[e[0]].hat_mesh == 1 for i, e in enumerate(mesh.eintraege))
+            mesh_ok &= sum(k.zeichnung_anzahl for k in mesh.knoten) == len(mesh.zeichnungen) and \
+                all(modell.knoten[k.modell_knoten].hat_mesh == 1 for k in mesh.knoten)
+        else:
+            mesh_ok &= all(e == (1 + li, i) for i, e in enumerate(mesh.eintraege)) and \
+                [k.modell_knoten for k in mesh.knoten] == [1 + li]
         vb = [grafik.GfxPuffer.aus_ressource(idx[k]) for k in mesh.vb_kennungen]
         ib = grafik.GfxPuffer.aus_ressource(idx[mesh.ib_kennungen[0]])
         puffer_ok &= not any(p.pruefen() for p in vb + [ib]) and len({p.anzahl for p in vb}) == 1
-        puffer_ok &= [(p.stride, p.code) for p in vb] == [(12, 39), (8, 35), (8, 35), (8, 35)] and (ib.stride, ib.code) == (2, 19)
+        puffer_ok &= [(p.stride, p.code) for p in vb] in ([(12, 39), (8, 35), (8, 35), (8, 35)],
+                                                          [(12, 39), (8, 35), (8, 35), (8, 35), (4, PUFFER_CODE_FARBE)]) \
+            and (ib.stride, ib.code) == (2, 19)
         ind = ib.indizes()
         pos = np.frombuffer(vb[0].daten, "<f4").reshape(-1, 3)
         for t in mesh.teilnetze:
@@ -1311,7 +1688,7 @@ def pruefen(archiv: erp.ErpFile, bau: Bau, quelle=None) -> List[Tuple[str, bool,
             index_ok &= len(teil) > 0 and teil.max() < vb[0].anzahl
             p = pos[teil].astype(np.float64)
             kugel_ok &= bool((np.sqrt(((p - np.array(t.kugel[:3])) ** 2).sum(1)) <= t.kugel[3] + 1e-6).all())
-        geladen = grafik.modell_laden(idx, basis, lod=li)
+        geladen = grafik.modell_laden(idx, basis, lod=li, welt=not animiert)   # bewegt: Knotenraum wie bau.lods
         ist = np.concatenate([_dreieckssuppe(n.positionen, n.dreiecke) for n in geladen.netze])
         soll = np.concatenate([_dreieckssuppe(t.positionen.astype(np.float32), t.dreiecke) for t in bau.lods[li]])
         ist, soll = ist[np.lexsort(ist.T[::-1])], soll[np.lexsort(soll.T[::-1])]
@@ -1324,6 +1701,8 @@ def pruefen(archiv: erp.ErpFile, bau: Bau, quelle=None) -> List[Tuple[str, bool,
         laenge = np.linalg.norm(n_ist, axis=1)
         geo_ok &= bool(np.abs(laenge - 1).max() < 2e-3) and set(np.unique(t_ist[:, 3]).tolist()) <= {-1.0, 1.0}
         geo_ok &= bool(np.abs((n_ist * t_ist[:, :3]).sum(1)).max() < 0.02)
+        if animiert:
+            geladen = grafik.modell_laden(idx, basis, lod=li)                  # Ruhelage im Modellraum
         alle_pos.append(np.concatenate([n.positionen for n in geladen.netze]))
     ok("GfxMeshRes: Rundlauf bitgleich, Einträge/Knoten je LOD", mesh_ok)
     ok("Puffer: Köpfe wie die Originale, Größe = Stride × Anzahl", puffer_ok)
@@ -1331,8 +1710,24 @@ def pruefen(archiv: erp.ErpFile, bau: Bau, quelle=None) -> List[Tuple[str, bool,
     ok("Geometrie = Eingabe (Dreiecke bitgleich in float32, Normalen/Tangenten gültig)", geo_ok, "; ".join(einzel))
     ok("Hüllkugeln der Teilnetze enthalten ihre Vertices", kugel_ok)
     p = np.concatenate(alle_pos).astype(np.float64)
-    ok("AABB = Grenzen der Geometrie", np.allclose(p.min(0), modell.aabb_min, atol=1e-6) and np.allclose(p.max(0), modell.aabb_max, atol=1e-6),
-       "%s … %s" % (np.round(modell.aabb_min, 3).tolist(), np.round(modell.aabb_max, 3).tolist()))
+    if animiert:
+        ok("AABB umfasst die Geometrie in Ruhe (und die Bewegung)",
+           bool((p.min(0) >= np.array(modell.aabb_min) - 1e-4).all() and (p.max(0) <= np.array(modell.aabb_max) + 1e-4).all()),
+           "%s … %s" % (np.round(modell.aabb_min, 3).tolist(), np.round(modell.aabb_max, 3).tolist()))
+        cr, tr = archiv.find(animiert["clip"]), None
+        if cr is not None:
+            clip = _anim.clip_lesen(cr.fragments[0].read(), cr.fragments[1].read())
+            tr = archiv.find(clip.string_table)
+            namen = {k.name for k in modell.knoten}
+            ok("Clip und Namenstabelle lesbar, Kanäle auf bewegte Modellknoten",
+               tr is not None and set(clip.kurven()) <= namen and set(clip.kurven()) <= set(_anim.stringtabelle_lesen(tr.data()))
+               and all(len(v) == 3 for v in clip.kurven().values()),
+               "%s, %d Knoten, %.2f s" % (animiert["clip"].rsplit("&clip=", 1)[-1], len(clip.kurven()), clip.laenge))
+        else:
+            ok("Clip vorhanden", False, animiert["clip"])
+    else:
+        ok("AABB = Grenzen der Geometrie", np.allclose(p.min(0), modell.aabb_min, atol=1e-6) and np.allclose(p.max(0), modell.aabb_max, atol=1e-6),
+           "%s … %s" % (np.round(modell.aabb_min, 3).tolist(), np.round(modell.aabb_max, 3).tolist()))
     ok("Modellkugel enthält alle Vertices", (np.sqrt(((p - np.array(modell.kugel[:3])) ** 2).sum(1)) <= modell.kugel[3] + 1e-6).all(),
        "Radius %.3f, halbe AABB-Diagonale %.3f" % (modell.kugel[3], float(np.linalg.norm(p.max(0) - p.min(0))) / 2))
     # Material- und Texturverweise

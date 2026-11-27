@@ -174,3 +174,33 @@ def test_fahrbahn_pruefregel_traeger_ohne_katalog(monkeypatch, tmp_path):
     assert m == []
     pruefregeln.fahrbahn_pruefen("abu_dhabi", None, m)
     assert [x["id"] for x in m] == ["FAHRBAHN_UNBEKANNT"]
+
+
+def test_farbton_der_vorlage_wird_neutral():
+    """Feature GP 19.11.2026: Silverstones kühler Grundfarbton färbte den Asphalt grün-grau (ohne seine Makrokarte)."""
+    from types import SimpleNamespace as P
+    quelle = P(parameter=[P(name="me_baseMapTint", art=1, typ=0x30003, wert=(0.6038, 0.6445, 0.6939)),
+                          P(name="me_detailStrength", art=1, typ=3, wert=(0.4,)),
+                          P(name="me_dustColour", art=1, typ=0x30003, wert=(1.0, 0.7913, 0.3916))])
+    ziel = P(parameter=[P(name="me_baseMapTint", art=1, typ=0x30003, wert=(0.73, 0.71, 0.69)),
+                        P(name="me_detailStrength", art=1, typ=3, wert=(1.0,)),
+                        P(name="me_dustColour", art=1, typ=0x30003, wert=(1.0, 0.888, 0.672))])
+    erg = asphalt_vorlagen._konstanten_uebernehmen(quelle, ziel)
+    r, g, b = erg["me_baseMapTint"]
+    assert r == g == b and abs(r - (0.6038 + 0.6445 + 0.6939) / 3) < 1e-9
+    assert erg["me_detailStrength"] == (0.4,)
+    d = erg["me_dustColour"]
+    assert d[0] == d[1] == d[2] and abs(d[0] - (1.0 + 0.7913 + 0.3916) / 3) < 1e-9
+
+
+def test_farbton_vorlage_bleibt_und_katalog_kennt_grundton():
+    """Option „Farbton der Vorlage behalten“ (20.11.2026) und Grundton je Vorlage im Katalog (Vorschau im Editor)."""
+    from types import SimpleNamespace as P
+    quelle = P(parameter=[P(name="me_baseMapTint", art=1, typ=0x30003, wert=(0.6038, 0.6445, 0.6939))])
+    ziel = P(parameter=[P(name="me_baseMapTint", art=1, typ=0x30003, wert=(0.73, 0.71, 0.69))])
+    assert asphalt_vorlagen._konstanten_uebernehmen(quelle, ziel, "vorlage")["me_baseMapTint"] == (0.6038, 0.6445, 0.6939)
+    with pytest.raises(asphalt_vorlagen.VorlagenFehler):
+        asphalt_vorlagen._konstanten_uebernehmen(quelle, ziel, "bunt")
+    vorlagen = asphalt_vorlagen.asphalt_katalog()["vorlagen"]
+    assert all(len(e.get("grundton") or []) == 3 for e in vorlagen.values())
+    assert vorlagen["silverstone"]["grundton"] == [0.604, 0.644, 0.694]

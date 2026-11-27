@@ -208,6 +208,14 @@ def test_build_options_weltkarten(tmp_path):
     assert "--asphalt-vorlage" not in build_command(*basis, "x7", options={"asphalt_vorlage": "traeger"})
     with pytest.raises(ValueError):
         build_command(*basis, "x8", options={"asphalt_vorlage": "../monza"})
+    ton = build_command(*basis, "x8b", options={"asphalt_vorlage": "silverstone", "asphalt_farbton": "vorlage"})
+    assert ton[ton.index("--asphalt-farbton") + 1] == "vorlage"
+    assert "--asphalt-farbton" not in build_command(*basis, "x8c", options={"asphalt_vorlage": "silverstone",
+                                                                             "asphalt_farbton": "neutral"})
+    assert "--asphalt-farbton" not in build_command(*basis, "x8d", options={"asphalt_vorlage": "traeger",
+                                                                             "asphalt_farbton": "vorlage"})
+    with pytest.raises(ValueError):
+        build_command(*basis, "x8e", options={"asphalt_vorlage": "silverstone", "asphalt_farbton": "bunt"})
     spuren = build_command(*basis, "x9", options={"skid_vorlage": "silverstone"})
     assert spuren[spuren.index("--skid-vorlage") + 1] == "silverstone"
     assert "--skid-vorlage" not in build_command(*basis, "x10", options={"skid_vorlage": "traeger"})

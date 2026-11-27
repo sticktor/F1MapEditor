@@ -19,9 +19,19 @@ from .i18n import N_, tr
 from .ux import zahl
 
 SIDES = {"beide": N_("both sides"), "links": N_("left"), "rechts": N_("right")}
-RUNOFFS = {None: N_("Automation"), "gras": N_("Grass"), "kies": N_("Gravel"), "asphalt": N_("Asphalt")}
+RUNOFFS = {None: N_("Automation"), "gras": N_("Grass"), "kies": N_("Gravel"), "asphalt": N_("Asphalt"),
+           "kunstrasen": N_("Artificial grass")}
+#: Randsteinarten (25.11.2026, docs/kerbtypen.md): Vorgaben für Profilhöhe, Breite und Tiefe des abgesenkten Randsteins
+KERB_TYPES = {None: (N_("Choose …"), None), "flach": (N_("Flat"), (0.0, 0.0, None)),
+              "erhoeht": (N_("Raised"), (0.04, 0.0, None)), "tief": (N_("Negative behind"), (0.0, 1.0, 0.05)),
+              "doppelt": (N_("Double (raised + negative)"), (0.04, 1.0, 0.05))}
 #: Felder eines Seitenraum-Abschnitts mit Zahlenwert (None = Automatik)
-NUMBER_FIELDS = ("randstein_breite", "gruenstreifen_breite", "barriere_abstand")
+NUMBER_FIELDS = ("randstein_breite", "gruenstreifen_breite", "barriere_abstand", "wulst_hoehe", "wulst_breite",
+                 "wulst_abstand", "wulst_stueck", "wulst_luecke", "randstein_hoehe", "tief_breite", "tief_tiefe")
+#: Wulstrandsteine (Sausage Kerbs): Grenzen wie strecke/definition.py WULST_GRENZEN
+SAUSAGE_HEIGHT_MAX, SAUSAGE_WIDTH = 0.4, (0.2, 3.0)
+SAUSAGE_GAP = (-3.0, 20.0)
+SAUSAGE_PIECE, SAUSAGE_SPACING = (0.5, 50.0), (0.0, 20.0)
 AUTO = -1.0              # Wert der Eingabefelder für „Automatik“ (Sondertext)
 #: Randwinkel: waagerecht (kein Eintrag), wie die Fahrbahn an dieser Stelle, eigener Winkel
 EDGES = {None: N_("Level"), "strecke": N_("Same as track"), "eigen": N_("Custom angle")}
@@ -131,16 +141,24 @@ def clear_range(raw, von, bis, side):
 
 
 # ------------------------------------------------------------------ Bedienfeld
-def _number_box(suffix, auto_text, maximum, tip):
+def _number_box(suffix, auto_text, maximum, tip, minimum=None, decimals=1, step=0.5):
+    """Zahlenfeld mit „Automatik“ auf dem kleinsten Wert (Standard ``AUTO``; bei Feldern mit negativen Werten
+    ``minimum`` − ein Schritt)."""
     box = QDoubleSpinBox()
-    box.setRange(AUTO, maximum)
-    box.setDecimals(1)
-    box.setSingleStep(0.5)
+    unten = AUTO if minimum is None else minimum - step
+    box.setRange(unten, maximum)
+    box.setDecimals(decimals)
+    box.setSingleStep(step)
     box.setSuffix(suffix)
-    box.setSpecialValueText(auto_text)          # Wert AUTO zeigt „Automatik“
-    box.setValue(AUTO)
+    box.setSpecialValueText(auto_text)          # kleinster Wert zeigt „Automatik“
+    box.setValue(unten)
     box.setToolTip(tip)
     return box
+
+
+def _box_value(box):
+    """Wert eines Zahlenfelds oder None für „Automatik“ (kleinster Wert)."""
+    return None if box.value() <= box.minimum() + 1e-9 else round(box.value(), 2)
 
 
 class CrossPanel(QFrame):
@@ -229,6 +247,46 @@ class CrossPanel(QFrame):
         edge.addWidget(self.edge_angle)
         grid.addWidget(QLabel(tr("Edge angle")), 3, 0)
         grid.addLayout(edge, 3, 1, 1, 3)
+        self.sausage = _number_box(" m", tr("none"), SAUSAGE_HEIGHT_MAX,
+                                   tr("Sausage kerb: raised kerb behind the kerb, height in metres (real ones 0.05–0.3 m). "
+                                      "Continuous by default, physics surface BUMP like in the game."),
+                                   decimals=2, step=0.05)
+        field(4, 0, tr("Sausage kerb"), self.sausage)
+        self.sausage_width = _number_box(" m", tr("Standard"), SAUSAGE_WIDTH[1],
+                                         tr("Width of the sausage kerb (standard 0.6 m)"),
+                                         minimum=SAUSAGE_WIDTH[0], decimals=2, step=0.1)
+        field(4, 1, tr("Sausage width"), self.sausage_width)
+        self.sausage_gap = _number_box(" m", tr("Standard"), SAUSAGE_GAP[1],
+                                       tr("Distance from the outer edge of the kerb to the sausage kerb (standard 0.1 m, "
+                                          "negative = on the kerb)"), minimum=SAUSAGE_GAP[0], decimals=2, step=0.1)
+        field(5, 0, tr("Behind kerb"), self.sausage_gap)
+        self.sausage_piece = _number_box(" m", tr("Standard"), SAUSAGE_PIECE[1],
+                                         tr("Length of one sausage kerb piece (standard 4 m)"),
+                                         minimum=SAUSAGE_PIECE[0], decimals=1, step=0.5)
+        field(5, 1, tr("Piece length"), self.sausage_piece)
+        self.sausage_spacing = _number_box(" m", tr("Standard"), SAUSAGE_SPACING[1],
+                                           tr("Gap between the pieces (standard 0 m = continuous, ends sloped only at the "
+                                              "start and end of the range)"),
+                                           minimum=SAUSAGE_SPACING[0], decimals=1, step=0.1)
+        field(6, 0, tr("Gap between pieces"), self.sausage_spacing)
+        self.kerb_type = QComboBox()
+        for key, (text, _) in KERB_TYPES.items():
+            self.kerb_type.addItem(tr(text), key)
+        self.kerb_type.setToolTip(tr("Presets for kerb height and negative kerb (fills the fields below)"))
+        self.kerb_type.currentIndexChanged.connect(self._kerb_type_chosen)
+        field(7, 0, tr("Kerb type"), self.kerb_type)
+        self.kerb_height = _number_box(" m", tr("Standard"), 0.1,
+                                       tr("Kerb profile: raised above the asphalt with sloped edges (Portimão 0.03–0.05 m, "
+                                          "standard 0 = flat)"), minimum=0.0, decimals=2, step=0.01)
+        field(7, 1, tr("Kerb height"), self.kerb_height)
+        self.negative_width = _number_box(" m", tr("Standard"), 5.0,
+                                          tr("Negative kerb: lowered strip behind the kerb with the off-track rumble "
+                                             "physics (0 = none)"), minimum=0.0, decimals=2, step=0.1)
+        field(8, 0, tr("Negative kerb"), self.negative_width)
+        self.negative_depth = _number_box(" m", tr("Standard"), 0.15,
+                                          tr("Depth of the negative kerb below the asphalt (Portimão 0.01–0.07 m, standard "
+                                             "0.05 m)"), minimum=0.0, decimals=2, step=0.01)
+        field(8, 1, tr("Depth"), self.negative_depth)
         layout.addLayout(form)
         layout.addLayout(grid)
         buttons = QHBoxLayout()
@@ -253,8 +311,12 @@ class CrossPanel(QFrame):
     def load(self, values):
         """Eingabefelder auf eigene Werte (``effective``) setzen; fehlende = Automatik."""
         for box, key in ((self.kerb, "randstein_breite"), (self.grass, "gruenstreifen_breite"),
-                         (self.barrier, "barriere_abstand")):
-            box.setValue(float(values[key]) if values.get(key) is not None else AUTO)
+                         (self.barrier, "barriere_abstand"), (self.sausage, "wulst_hoehe"),
+                         (self.sausage_width, "wulst_breite"), (self.sausage_gap, "wulst_abstand"),
+                         (self.sausage_piece, "wulst_stueck"), (self.sausage_spacing, "wulst_luecke"),
+                         (self.kerb_height, "randstein_hoehe"), (self.negative_width, "tief_breite"),
+                         (self.negative_depth, "tief_tiefe")):
+            box.setValue(float(values[key]) if values.get(key) is not None else box.minimum())
         self.runoff.setCurrentIndex(max(0, self.runoff.findData(values.get("auslauf"))))
         rand = values.get("rand_neigung")
         self.edge.setCurrentIndex(max(0, self.edge.findData(rand if rand in (None, "strecke") else "eigen")))
@@ -267,7 +329,22 @@ class CrossPanel(QFrame):
         rand = self.edge.currentData()
         return {"randstein_breite": number(self.kerb), "gruenstreifen_breite": number(self.grass),
                 "auslauf": self.runoff.currentData(), "barriere_abstand": number(self.barrier),
-                "rand_neigung": round(self.edge_angle.value(), 1) if rand == "eigen" else rand}
+                "rand_neigung": round(self.edge_angle.value(), 1) if rand == "eigen" else rand,
+                "wulst_hoehe": _box_value(self.sausage), "wulst_breite": _box_value(self.sausage_width),
+                "wulst_abstand": _box_value(self.sausage_gap), "wulst_stueck": _box_value(self.sausage_piece),
+                "wulst_luecke": _box_value(self.sausage_spacing), "randstein_hoehe": _box_value(self.kerb_height),
+                "tief_breite": _box_value(self.negative_width), "tief_tiefe": _box_value(self.negative_depth)}
+
+    def _kerb_type_chosen(self, *_):
+        """Vorgabe der Randsteinart in die Felder schreiben (Tiefe nur, wenn die Vorgabe eine hat)."""
+        werte = KERB_TYPES.get(self.kerb_type.currentData(), (None, None))[1]
+        if werte is None:
+            return
+        hoehe, breite, tiefe = werte
+        self.kerb_height.setValue(hoehe)
+        self.negative_width.setValue(breite)
+        if tiefe is not None:
+            self.negative_depth.setValue(tiefe)
 
     def road_half(self):
         return None if self.road.value() <= AUTO + 1e-9 else round(self.road.value(), 2)
@@ -275,6 +352,8 @@ class CrossPanel(QFrame):
     def set_enabled(self, enabled, reason=""):
         for widget in (self.von, self.bis, self.selection_button, self.cursor_button, self.lap_button, self.side,
                        self.road, self.kerb, self.grass, self.runoff, self.barrier, self.edge, self.edge_angle,
+                       self.sausage, self.sausage_width, self.sausage_gap, self.sausage_piece, self.sausage_spacing,
+                       self.kerb_type, self.kerb_height, self.negative_width, self.negative_depth,
                        self.apply_button, self.clear_button):
             widget.setEnabled(enabled)
         if reason:

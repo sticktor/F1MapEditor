@@ -1,5 +1,25 @@
 Mapeditor is a Windows editor for designing your own tracks for F1 25.
 
+## New in 0.6.0
+
+- **3D view:** see your track in 3D without building it. Workspace *3D* (Ctrl+3) shows map and 3D view side by side, *View → 3D view in its own window* (Ctrl+Shift+3) opens it separately. Drive the lap at racing-line speed (Play, onboard, chase and TV cameras), look around with the editor camera (drag to orbit around the point under the mouse, wheel zooms to the mouse, right mouse + W A S D to fly, Home shows the whole track, F focuses), switch layers (racing line by speed, DRS, braking boards, grid, sectors), set the time of day and move, rotate or delete objects directly in 3D (Tab). The 2D map shows where the 3D camera looks
+- **Game look:** one button switches the 3D view to the real surfaces of the game (asphalt or the chosen track surface, kerbs with their white end pieces, sausage kerbs, grass and gravel in the chosen landscape, concrete, artificial grass), the outer terrain of the carrier with your mountains and the colours of the build, the carrier's garages, pit perches and braking boards where the build places them, and the game's models of your environment, including trees, bushes and palms with cut-out leaves. Read-only from the carrier package and your game folder, cached locally (about 15 s the first time)
+- **Fast 3D view:** a loading indicator instead of an empty view; an already calculated track appears right away, the game look comes from the cache, and hundreds of trees stay smooth
+- **Automatic updates:** the editor checks GitHub for new releases (at most once a day, can be switched off), shows the release notes and on request downloads, verifies and installs the new version; after an update the release notes appear once (Help → What's new …, Help → Check for updates …). 0.5.1 does not have it yet, so this update has to be downloaded by hand once
+- **Workspaces:** tabs at the left of the toolbar switch between *Track*, *Environment*, *3D*, *Review* and *All* (Ctrl+1 … Ctrl+5), each with its own panels, tabs and splitter sizes; next to them only the tools of the workspace. The *Environment* tool is now called *Place*, project name and save state moved to the status bar. View → Workspace → Reset this workspace restores the default
+- **New kerb types** (Cross-section tab, per range and side), tested in the game:
+  - **Sausage kerbs:** raised, rounded kerbs behind the kerb with the game's bump physics; height, width, distance, piece length and gap adjustable. New check WU-01 warns when one is within reach of the racing line
+  - **Raised kerbs** with sloped edges, **negative kerbs** (a lowered strip with rumble physics) and **double kerbs**, chosen with *Kerb type*
+  - Every kerb now starts and ends with the game's white, rounded **end pieces**
+  - **Artificial grass** as run-off, with textures copied from your game folder (read-only)
+- **Animations from Blender:** object animations in a glTF export (rotating, moving, scaling parts such as wind turbine rotors) play in the game; tick *Play animation* per model. Animated materials for water, scrolling LED text and waving flags (glTF extras or `modelle.json`). New check MO-08. Guide: section 6 of `own_models_blender.md`
+- **Environment tools:** place rows of objects along the track (grandstands, fences, flags every x m, facing the track), plant a band between two stations or fill the infield (distance to the track and between objects, mix of species), mark gates and bridges as *Over the track*, put buildings on a *Foundation* on slopes, keep imported models in a **model library** for all projects, and manage installed Swofty add-ons in the clean-up window
+- **Visibility corridor** for the build is chosen automatically when there would be too many cells (Build window)
+- **Track surface colour:** templates keep only their brightness by default, so asphalt no longer looks green-grey; tick *Keep the template's colour tone* for the original tint
+- The download grows from about 150 to about 240 MB unpacked (Qt Quick 3D for the 3D view)
+- **Fixed:** greenish/olive track edges (dust colour of the surface template, grass of the macro map bleeding onto the asphalt)
+- **Install in launcher (and start)** no longer freezes the Build window while it asks Swofty Launcher for its add-ons; the window shows each step in plain words (installing, game running, reading the session), blocks a second build meanwhile and can cancel the installation
+
 ## New in 0.5.1
 
 - **Choose the track surface and the tyre marks:** in the Build window (Advanced) pick the asphalt and the dark tyre-mark strip of an F1 25 circuit, e.g. Abu Dhabi, Silverstone or Losail, with a small preview. The build copies them from your game folder (read-only) into the package; the pit lane stays Portimão. Default is the carrier as before. Tested in the game with the Abu Dhabi surface and the Losail tyre marks; Bahrain, Imola, Madrid, Melbourne and Suzuka supply only the base textures and are untested. Contributed by [Ftoaster](https://github.com/Ftoaster) in PR #7, thank you!
@@ -68,7 +88,7 @@ Mapeditor is a Windows editor for designing your own tracks for F1 25.
 
 ## Download
 
-`Mapeditor-0.5.1-win64.zip`: unpack the whole folder and start `Mapeditor.exe`. The program is not signed, so Windows may
+`Mapeditor-0.6.0-win64.zip`: unpack the whole folder and start `Mapeditor.exe`. The program is not signed, so Windows may
 show a warning.
 
 ## What you need
@@ -104,4 +124,4 @@ Use offline and at your own risk. Back up your save data and game database first
 
 ## Licence
 
-GPL-3.0-only for this project's code, see `LICENSE`. The source code of this release is in this repository at tag `v0.5.1`.
+GPL-3.0-only for this project's code, see `LICENSE`. The source code of this release is in this repository at tag `v0.6.0`.

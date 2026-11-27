@@ -33,7 +33,7 @@ import numpy as np
 # --------------------------------------------------------------------------- Oberflächen
 #: Oberflächenklassen in fester Reihenfolge (Index = Oberflächen-Nummer im Netz).
 OBERFLAECHEN = ["asphalt", "randstein", "gras", "kies", "mauer", "boxengasse", "linie", "auslauf", "startbox",
-                "gebaeude"]
+                "gebaeude", "wulst", "randstein_anfang", "randstein_ende", "randstein_tief", "kunstrasen"]
 OBERFLAECHE = {name: i for i, name in enumerate(OBERFLAECHEN)}
 
 #: Abbildung Oberflächenklasse -> 4-Zeichen-Code der Fahrphysik (TRN~).
@@ -61,6 +61,19 @@ STANDARD_CODES = {
                             "sichtbar, nicht in der Fahrphysik"},
     "gebaeude": {"code": "SCON", "status": "vermutet",
                  "hinweis": "Garagengebäude der Boxengasse (27.10.2026); Beton wie die Mauern"},
+    "randstein_anfang": {"code": "RMBL", "status": "sehr plausibel",
+                         "hinweis": "Anfangsstück des Randsteins (weiß, abgerundet; Portimão por_rumble_triangle_b_01)"},
+    "randstein_ende": {"code": "RMBL", "status": "sehr plausibel",
+                       "hinweis": "Endstück des Randsteins (weiß, abgerundet; Portimão por_rumble_triangle_b_03)"},
+    "randstein_tief": {"code": "RMBO", "status": "sehr plausibel",
+                       "hinweis": "Abgesenkter Randstein (off-track rumble): Portimão 1,4–7,3 cm unter dem Asphalt, "
+                                  "20 Spielstrecken (docs/kerbtypen.md)"},
+    "kunstrasen": {"code": "ASTR", "status": "sehr plausibel",
+                   "hinweis": "Kunstrasen als Auslauf; 11 Spielstrecken (Melbourne, Texas, Shanghai …), Textur aus dem "
+                              "Spielordner (docs/kerbtypen.md)"},
+    "wulst": {"code": "BUMP", "status": "sehr plausibel",
+              "hinweis": "Wulstrandsteine (Sausage Kerbs, 25.11.2026): erhöhte BUMP-Flächen hinter Randsteinen; Portimão "
+                         "2360 Dreiecke in 9 Stücken, 0,1–0,3 m hoch (docs/wurstrandsteine.md)"},
 }
 
 # --------------------------------------------------------------------------- Achsen
@@ -126,17 +139,33 @@ STANDARD = {
         "nachlauf_m": 10.0,          # innen: nach Kurvenende
         "aussen_nachlauf_m": 40.0,   # außen: vom Scheitel bis Kurvenende + diese Länge
         "rampe_m": 4.0,              # Breite läuft über diese Länge an/aus
+        # Randsteinarten (25.11.2026, docs/kerbtypen.md): Profilhöhe (0 = flach wie bisher; Portimão 3–5 cm über dem
+        # Asphalt), Anfangs- und Endstücke (weiß, abgerundet), abgesenkter Randstein dahinter (Breite 0 = keiner)
+        "profil_hoehe_m": 0.0,
+        "enden": True,
+        "tief_breite_m": 0.0,
+        "tief_m": 0.05,
     },
     "gruenstreifen": {"breite": 2.0},
+    # Wulstrandsteine (Sausage Kerbs, 25.11.2026, docs/wurstrandsteine.md): nur wo ein Seitenraum-Abschnitt
+    # wulst_hoehe > 0 setzt; Abschnitte können auch wulst_breite und wulst_abstand überschreiben.
+    # abstand_m: vom äußeren Randsteinrand (ohne Randstein vom Fahrbahnrand) bis zur Innenkante des Wulsts
+    # luecke_m 0 = durchgehend (Standard seit 25.11.2026, Nutzer); je Abschnitt wulst_stueck/wulst_luecke
+    "wulst": {"breite_m": 0.6, "abstand_m": 0.1, "stueck_m": 4.0, "luecke_m": 0.0, "rampe_m": 0.4},
     # Seitenraum je Streckenbereich (27.10.2026, Mapeditor-Reiter Querschnitt): Abschnitte überschreiben die
     # Automatik zwischen von_s und bis_s (Meter ab Eingabeursprung wie fahrbahn.abschnitte) auf einer Seite:
     # {"von_s", "bis_s", "seite": "links"|"rechts"|"beide", "randstein_breite" (0 = keiner),
     #  "gruenstreifen_breite", "auslauf": "gras"|"kies"|"asphalt", "barriere_abstand",
-    #  "rand_neigung": "strecke" (Fahrbahnneigung läuft weiter) | Grad (positiv = steigt nach außen)};
+    #  "rand_neigung": "strecke" (Fahrbahnneigung läuft weiter) | Grad (positiv = steigt nach außen),
+    #  "wulst_hoehe" (m, 0 = kein Wulstrandstein), "wulst_breite" (m), "wulst_abstand" (m hinter dem Randstein),
+    #  "wulst_stueck" (Stücklänge m), "wulst_luecke" (Lücke m, 0 = durchgehend),
+    #  "randstein_hoehe" (Profil m), "tief_breite"/"tief_tiefe" (abgesenkter Randstein m); auslauf auch "kunstrasen"};
     #  fehlende Felder = Automatik, ohne rand_neigung bleibt der Rand waagerecht
     # rand_breite_m: so weit neben der Fahrbahn wirkt der Randwinkel, danach waagerecht (sonst summiert er sich bei weit
     # entfernter Barriere auf; LongBoy: bis 13 m Höhe)
     "seitenraum": {"abschnitte": [], "rand_breite_m": 12.0},
+    # Kunstrasen (Auslauf „kunstrasen“): Texturen aus dieser Spielstrecke (nur lesend aus dem Spielordner)
+    "kunstrasen": {"vorlage": "melbourne"},
     "kiesbett": {
         "aktiv": True,
         "kruemmung_schwelle": 1.0 / 200.0,  # Kurven, die ein Kiesbett bekommen
@@ -357,11 +386,15 @@ class Streckendefinition:
 
 
 # --------------------------------------------------------------------------- Laden
-SEITENRAUM_AUSLAUF = ("gras", "kies", "asphalt")
+SEITENRAUM_AUSLAUF = ("gras", "kies", "asphalt", "kunstrasen")
 
 
 #: Größter Randwinkel in Grad (seitenraum.abschnitte[].rand_neigung)
 RAND_NEIGUNG_MAX = 30.0
+#: Erlaubte Werte der Wulstrandsteine je Abschnitt (m)
+WULST_GRENZEN = {"wulst_hoehe": (0.0, 0.4), "wulst_breite": (0.2, 3.0), "wulst_abstand": (-3.0, 20.0),
+                 "wulst_stueck": (0.5, 50.0), "wulst_luecke": (0.0, 20.0),
+                 "randstein_hoehe": (0.0, 0.1), "tief_breite": (0.0, 5.0), "tief_tiefe": (0.0, 0.15)}
 
 
 def seitenraum_pruefen(seitenraum):
@@ -376,10 +409,13 @@ def seitenraum_pruefen(seitenraum):
         if ab.get("seite", "beide") not in ("links", "rechts", "beide"):
             raise ValueError("%s.seite must be links, rechts or beide" % ort)
         if ab.get("auslauf") is not None and ab["auslauf"] not in SEITENRAUM_AUSLAUF:
-            raise ValueError("%s.auslauf must be gras, kies or asphalt" % ort)
+            raise ValueError("%s.auslauf must be gras, kies, asphalt or kunstrasen" % ort)
         for name, minimum in (("randstein_breite", 0.0), ("gruenstreifen_breite", 0.0), ("barriere_abstand", 0.5)):
             if ab.get(name) is not None and not float(ab[name]) >= minimum:
                 raise ValueError("%s.%s must be ≥ %g" % (ort, name, minimum))
+        for name, (unten, oben) in WULST_GRENZEN.items():
+            if ab.get(name) is not None and not unten <= float(ab[name]) <= oben:
+                raise ValueError("%s.%s must be between %g and %g m" % (ort, name, unten, oben))
         rand = ab.get("rand_neigung")
         if rand is not None and rand != "strecke":
             if isinstance(rand, str) or not -RAND_NEIGUNG_MAX <= float(rand) <= RAND_NEIGUNG_MAX:

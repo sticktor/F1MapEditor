@@ -36,7 +36,12 @@
      "me_detailAlbedoMap": "eaid://environment_package/core_assets/shared_textures/terrain/textures/track/core_track_detail_a_01_bm.tif",
      "me_detailSurfaceMap": "eaid://environment_package/core_assets/shared_textures/terrain/textures/track/core_track_detail_a_01_s.tif"
     },
-    "vorschau": "type1.png"
+    "vorschau": "type1.png",
+    "grundton": [
+     0.434,
+     0.381,
+     0.337
+    ]
    },
    "austria": {
     "name": "Austria",
@@ -55,7 +60,12 @@
      "me_detailAlbedoMap": "eaid://environment_package/core_assets/shared_textures/terrain/textures/track/core_track_detail_a_01_bm.tif",
      "me_detailSurfaceMap": "eaid://environment_package/core_assets/shared_textures/terrain/textures/track/core_track_detail_a_01_s.tif"
     },
-    "vorschau": "type2.png"
+    "vorschau": "type2.png",
+    "grundton": [
+     0.1,
+     0.1,
+     0.1
+    ]
    },
    "baku": {
     "name": "Baku / Brazil (+10)",
@@ -84,7 +94,12 @@
      "me_detailAlbedoMap": "eaid://environment_package/core_assets/shared_textures/terrain/textures/track/core_track_detail_a_01_bm.tif",
      "me_detailSurfaceMap": "eaid://environment_package/core_assets/shared_textures/terrain/textures/track/core_track_detail_a_01_s.tif"
     },
-    "vorschau": "baku.png"
+    "vorschau": "baku.png",
+    "grundton": [
+     0.847,
+     0.847,
+     0.847
+    ]
    },
    "catalunya": {
     "name": "Catalunya",
@@ -102,7 +117,12 @@
      "me_detailAlbedoMap": "eaid://environment_package/core_assets/shared_textures/terrain/textures/detail/core_track_detail_02_v_bm.tif",
      "me_detailSurfaceMap": "eaid://environment_package/core_assets/shared_textures/terrain/textures/detail/core_track_detail_02_v_s.tif"
     },
-    "vorschau": "catalunya.png"
+    "vorschau": "catalunya.png",
+    "grundton": [
+     0.296,
+     0.319,
+     0.342
+    ]
    },
    "hungaroring": {
     "name": "Hungaroring",
@@ -120,7 +140,12 @@
      "me_detailAlbedoMap": "eaid://environment_package/core_assets/shared_textures/terrain/textures/track/core_track_detail_a_03_bm.tif",
      "me_detailSurfaceMap": "eaid://environment_package/core_assets/shared_textures/terrain/textures/track/core_track_detail_a_03_s.tif"
     },
-    "vorschau": "hungaroring.png"
+    "vorschau": "hungaroring.png",
+    "grundton": [
+     0.604,
+     0.584,
+     0.521
+    ]
    },
    "losail": {
     "name": "Losail",
@@ -139,7 +164,12 @@
      "me_detailAlbedoMap": "eaid://environment_package/core_assets/shared_textures/terrain/textures/track/asphalt/losail/los_track_detail_01_bm.tif",
      "me_detailSurfaceMap": "eaid://environment_package/core_assets/shared_textures/terrain/textures/track/asphalt/losail/los_track_detail_01_s.tif"
     },
-    "vorschau": "type4.png"
+    "vorschau": "type4.png",
+    "grundton": [
+     0.407,
+     0.407,
+     0.407
+    ]
    },
    "miami": {
     "name": "Miami",
@@ -158,7 +188,12 @@
      "me_detailAlbedoMap": "eaid://environment_package/core_assets/shared_textures/terrain/textures/detail/core_track_detail_02_v_bm.tif",
      "me_detailSurfaceMap": "eaid://environment_package/core_assets/shared_textures/terrain/textures/detail/core_track_detail_02_v_s.tif"
     },
-    "vorschau": "type5.png"
+    "vorschau": "type5.png",
+    "grundton": [
+     0.445,
+     0.445,
+     0.445
+    ]
    },
    "silverstone": {
     "name": "Silverstone",
@@ -177,7 +212,12 @@
      "me_detailAlbedoMap": "eaid://environment_package/core_assets/shared_textures/terrain/textures/detail/core_track_detail_02_bm.tif",
      "me_detailSurfaceMap": "eaid://environment_package/core_assets/shared_textures/terrain/textures/detail/core_track_detail_02_s.tif"
     },
-    "vorschau": "type6.png"
+    "vorschau": "type6.png",
+    "grundton": [
+     0.604,
+     0.644,
+     0.694
+    ]
    },
    "spa_francorchamps": {
     "name": "Spa-Francorchamps",
@@ -196,7 +236,12 @@
      "me_detailAlbedoMap": "eaid://environment_package/core_assets/shared_textures/terrain/textures/track/asphalt/spa_francorchamps/spa_francochamps_track_detail_01_b_bm.tif",
      "me_detailSurfaceMap": "eaid://environment_package/core_assets/shared_textures/terrain/textures/track/asphalt/spa_francorchamps/spa_francochamps_track_detail_01_c_s.tif"
     },
-    "vorschau": "type7.png"
+    "vorschau": "type7.png",
+    "grundton": [
+     0.332,
+     0.332,
+     0.332
+    ]
    },
    "bahrain": {
     "name": "Bahrain",
@@ -213,7 +258,12 @@
      "me_normalMap": "eaid://environment_package/core_assets/shared_textures/terrain/textures/track/asphalt/bah_asphalt_a_01_n.tif",
      "me_surfaceMap": "eaid://environment_package/core_assets/shared_textures/terrain/textures/track/asphalt/bah_asphalt_a_01_s.tif"
     },
-    "vorschau": "type8.png"
+    "vorschau": "type8.png",
+    "grundton": [
+     1.0,
+     1.0,
+     1.0
+    ]
    },
    "imola": {
     "name": "Imola",
@@ -230,7 +280,12 @@
      "me_normalMap": "eaid://environment_package/core_assets/shared_textures/terrain/textures/track/asphalt/imo_asphalt_a_01_n.tif",
      "me_surfaceMap": "eaid://environment_package/core_assets/shared_textures/terrain/textures/track/asphalt/imo_asphalt_a_01_shiney_ps_levels_s.tif"
     },
-    "vorschau": "type9.png"
+    "vorschau": "type9.png",
+    "grundton": [
+     1.0,
+     1.0,
+     1.0
+    ]
    },
    "madrid": {
     "name": "Madrid",
@@ -247,7 +302,12 @@
      "me_normalMap": "eaid://environment_package/core_assets/shared_textures/terrain/textures/track/asphalt/mad_asphalt_a_01_n.tif",
      "me_surfaceMap": "eaid://environment_package/core_assets/shared_textures/terrain/textures/track/asphalt/mad_asphalt_a_01_s.tif"
     },
-    "vorschau": "type10.png"
+    "vorschau": "type10.png",
+    "grundton": [
+     0.216,
+     0.216,
+     0.216
+    ]
    },
    "melbourne": {
     "name": "Melbourne",
@@ -263,7 +323,12 @@
      "me_normalMap": "eaid://environment_package/core_assets/shared_textures/terrain/textures/track/asphalt/mel_asphalt_a_01_n.tif",
      "me_surfaceMap": "eaid://environment_package/core_assets/shared_textures/terrain/textures/track/asphalt/mel_asphalt_a_01_test_shine_s.tif"
     },
-    "vorschau": "melbourne.png"
+    "vorschau": "melbourne.png",
+    "grundton": [
+     1.0,
+     0.96,
+     0.92
+    ]
    },
    "suzuka": {
     "name": "Suzuka",
@@ -280,7 +345,12 @@
      "me_normalMap": "eaid://environment_package/core_assets/shared_textures/terrain/textures/track/asphalt/suz_asphalt_a_01_n.tif",
      "me_surfaceMap": "eaid://environment_package/core_assets/shared_textures/terrain/textures/track/asphalt/core_asphalt_a_01_s.tif"
     },
-    "vorschau": "type11.png"
+    "vorschau": "type11.png",
+    "grundton": [
+     0.462,
+     0.434,
+     0.386
+    ]
    },
    "traeger": {
     "traeger": true,
@@ -291,7 +361,12 @@
      "type12",
      "type3"
     ],
-    "vorschau": "type12.png"
+    "vorschau": "type12.png",
+    "grundton": [
+     0.73,
+     0.708,
+     0.694
+    ]
    }
   }
  },

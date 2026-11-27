@@ -67,13 +67,17 @@ FARBEN = {"baum": (60, 170, 70), "busch": (150, 200, 80), "palme": (230, 200, 40
           "zelt": (240, 240, 240), "moebel": (90, 160, 230), "flagge": (230, 70, 160), "licht": (255, 240, 120),
           "sonstiges": (170, 170, 170)}
 
-_OBJEKT_SCHLUESSEL = ("id", "modell", "x", "z", "hoehe_m", "drehung_grad", "skala", "gruppe", "boden")
+_OBJEKT_SCHLUESSEL = ("id", "modell", "x", "z", "hoehe_m", "drehung_grad", "skala", "gruppe", "boden", "ueber_fahrbahn")
 _DATEI_SCHLUESSEL = ("schema", "bodenbewuchs", "gelaende", "vorderseiten", "objekte")
 #: Bodenbezug je Objekt (optionales Feld ``boden``, 15.11.2026, docs/mapeditor/objekte_ausrichtung.md):
 #: ``auto`` (Standard) = Grundriss auf den tiefsten Bodenpunkt darunter, Modelle mit Geometrie über dem Ursprung
 #: (z. B. ``jumbotron_back_b`` ab 2,1 m) mit der Unterkante; ``ursprung`` = Modellursprung auf den Boden am Mittelpunkt
 #: (Verhalten bis 14.11.2026); ``unterkante`` = Unterkante der Modell-AABB immer auf den tiefsten Bodenpunkt.
-BODEN_MODI = ("auto", "ursprung", "unterkante")
+#: ``fundament`` (20.11.2026, Feature GP: 13 Tribünen am Hang): der Bau ebnet das Gelände unter dem Grundriss auf die
+#: höchste Stelle ein (``fundament_flaechen``, ``spiel_geometrie.fundamente_anwenden``), das Objekt steht dann wie ``auto``.
+BODEN_MODI = ("auto", "ursprung", "unterkante", "fundament")
+#: Fundament: Rand um den Grundriss, über den das eingeebnete Gelände in den Hang übergeht (m)
+FUNDAMENT_RAND_M = 10.0
 #: Kollision je Objekt (optionales Feld ``kollision``, M5b): überschreibt den Wert des eigenen Modells
 #: (``modelle.json`` → ``kollision``); fehlt das Feld, gilt der Wert des Modells (docs/eigene_modelle_m5b.md)
 KOLLISION_ARTEN = ("keine", "quader")
@@ -152,6 +156,11 @@ def normalisieren(roh) -> dict:
         o["gruppe"] = "" if g is None else str(g)
         if "boden" in o and o["boden"] not in BODEN_MODI:
             raise UmgebungFehler("Object %s: boden must be one of %s (%r)" % (oid, ", ".join(BODEN_MODI), o["boden"]))
+        if "ueber_fahrbahn" in o:      # 20.11.2026: Tor/Brücke überspannt die Bahn gewollt (kein UMG_AUF_FAHRBAHN)
+            if not isinstance(o["ueber_fahrbahn"], bool):
+                raise UmgebungFehler("Object %s: ueber_fahrbahn must be true/false (%r)" % (oid, o["ueber_fahrbahn"]))
+            if not o["ueber_fahrbahn"]:
+                del o["ueber_fahrbahn"]
         if "kollision" in o and o["kollision"] not in KOLLISION_ARTEN:   # M5b, strecke/kollision.py
             raise UmgebungFehler("Object %s: kollision must be one of %s (%r)" % (oid, ", ".join(KOLLISION_ARTEN),
                                                                                 o["kollision"]))
@@ -847,8 +856,10 @@ def eigene_einsetzen(archiv, namen, projekt, code="portimao", cache="standard", 
             kennungen[n] = um.modell
             b = um.bericht
             treffer = bool(b.get("aus_zwischenspeicher"))
+            e = em.eintrag(tabelle, n)
+            clip = (b.get("animation") or {}).get("clip") if e.get("animation", "an") == "an" else None
             bericht["modelle"][em.PRAEFIX + n] = {
-                "modell": um.modell, "ressourcen": len(um.ressourcen), "bytes": int(b.get("bytes", 0)),
+                "modell": um.modell, "ressourcen": len(um.ressourcen), "bytes": int(b.get("bytes", 0)), "clip": clip,
                 "textur_bytes": int(b.get("textur_bytes", 0)), "aus_zwischenspeicher": treffer,
                 "kategorie": gut[n]["kategorie"], "instanzen": 0,
                 "hinweise": list(um.hinweise) + [h for h in gut[n].get("hinweise", []) if h not in um.hinweise]}
@@ -950,6 +961,8 @@ def pruefen_mit_geprueft(daten, definition_oder_generatorausgabe=None, versatz=N
         fl, kanten = flaechen_aus_netz(netz)
         namen = netz[3]
         for o in obj:
+            if o.get("ueber_fahrbahn"):
+                continue
             klassen = sorted({namen[int(fl.klasse[i])] for i, _ in fl.treffer(o["x"], o["z"])} & set(FAHRBAHN_KLASSEN))
             ab = kanten.abstand(o["x"], o["z"], MAUER_ABSTAND_M) if kanten is not None else math.inf
             if klassen or ab < MAUER_ABSTAND_M:
@@ -976,6 +989,8 @@ def pruefen_mit_geprueft(daten, definition_oder_generatorausgabe=None, versatz=N
             halb = np.maximum(np.asarray(st.wl, float), np.asarray(st.wr, float)) + 1.0
             kanten = Kanten(P, np.roll(P, -1, axis=0))
             for o in obj:
+                if o.get("ueber_fahrbahn"):
+                    continue
                 ab = kanten.abstand(o["x"], o["z"], float(halb.max()))
                 if ab < float(halb.max()):
                     i = int(np.argmin(np.linalg.norm(P - [o["x"], o["z"]], axis=1)))
@@ -1242,6 +1257,29 @@ def grundriss(objekt: dict, eintrag: Optional[dict], versatz=(0.0, 0.0, 0.0)) ->
     return np.c_[x, z]
 
 
+def fundament_flaechen(daten, katalog_daten=None, versatz=None, projekt=None) -> List[dict]:
+    """Grundrisse (Welt, 4×2) der Objekte mit ``boden: fundament`` für ``spiel_geometrie.fundamente_anwenden``.
+    Katalog bzw. eigene Modelle des Projekts liefern die AABB; Objekte ohne AABB entfallen."""
+    from . import platzierung
+    v = platzierung.VERSATZ if versatz is None else versatz
+    d = laden(daten) if isinstance(daten, (str, os.PathLike)) else normalisieren(daten)
+    gesucht = [o for o in d["objekte"] if o.get("boden") == "fundament"]
+    if not gesucht:
+        return []
+    index = dict(katalog_index(katalog_daten if katalog_daten else katalog()))
+    if projekt:
+        try:
+            index.update({e["modell"]: e for e in projektmodelle(projekt)[0].values() if e.get("modell")})
+        except Exception:                      # eigene Modelle optional
+            pass
+    erg = []
+    for o in gesucht:
+        ecken = grundriss(o, index.get(o["modell"]), v)
+        if ecken is not None:
+            erg.append({"id": o["id"], "ecken": ecken.tolist(), "rand_m": FUNDAMENT_RAND_M})
+    return erg
+
+
 def _proben(ecken: np.ndarray) -> np.ndarray:
     """Ecken, Kantenmitten und Mittelpunkt eines Grundrisses."""
     mitten = (ecken + np.roll(ecken, -1, axis=0)) / 2.0
@@ -1272,6 +1310,8 @@ def bodenlage(objekt: dict, eintrag: Optional[dict], hoehen: "Flaechen", versatz
     spanne = max(werte) - min(werte)
     pflanze = kat in PFLANZEN
     boden = y0 if (modus == "ursprung" or pflanze) else min(werte)
+    if modus == "fundament":       # Gelände ist eingeebnet; Restspanne (Raster 8 m) nicht als Hang melden
+        boden, spanne = max(werte), 0.0
     unten = float(((eintrag or {}).get("aabb_min") or [0.0, 0.0, 0.0])[1])
     skala = float(objekt.get("skala", 1.0))
     ausgleich = -unten * skala if (modus == "unterkante" or (modus == "auto" and unten > BODEN_ANHEBEN_M)) else 0.0
@@ -1471,7 +1511,11 @@ def einsetzen(archiv, daten, code="portimao", versatz=None, katalog_daten=None, 
         _text_setzen(p, inst.block, ("overrides", "Model", "mat binding"), modell + ".emb?context=default")
         pkg.instanz_matrix_setzen(p, inst, lagematrix(wx, y, wz, o["drehung_grad"], o["skala"]))
         if o["modell"] in eigen:
-            bericht["eigene_modelle"]["modelle"]["usr_" + eigen[o["modell"]]]["instanzen"] += 1
+            eb_m = bericht["eigene_modelle"]["modelle"]["usr_" + eigen[o["modell"]]]
+            eb_m["instanzen"] += 1
+            if eb_m.get("clip"):     # A2: bewegtes eigenes Modell → AnimModel mit seinem Clip (docs/animationen.md)
+                pkg.instanz_animieren(p, inst, eb_m["clip"])
+                bericht["animiert"] = bericht.get("animiert", 0) + 1
         bericht["gesetzt"] += 1
         bericht["je_layer"][layer] = bericht["je_layer"].get(layer, 0) + 1
         bericht["je_kategorie"][kat] = bericht["je_kategorie"].get(kat, 0) + 1
@@ -1595,6 +1639,10 @@ def karte(pfad_png, daten, netz=None, versatz=None, katalog_daten=None, logik=No
             f = farben.get(namen[si], (120, 120, 120))
             for t in tri[surf == si]:
                 dr.polygon([P(vv[j, 0] + v[0], vv[j, 2] + v[2]) for j in t], fill=f)
+    if isinstance(logik, (str, os.PathLike)):
+        # 20.11.2026: Pfad auf logik_platziert.json (Welt) bzw. strecke_logik.json; vorher TypeError beim Indizieren
+        with open(logik, encoding="utf-8") as f:
+            logik = json.load(f)
     if logik is not None:
         for s in logik["spielformate"]["TrackSpace"]["splines"]:
             pts = [P(p[0], p[2]) for p in s["position"]]

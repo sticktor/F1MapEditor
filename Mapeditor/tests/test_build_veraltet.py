@@ -55,3 +55,24 @@ def test_ego_build_logs_warning_swofty_does_not(builder):
     assert any(m["text"] == tr(EGO_DEPRECATED) for m in d.messages if m["id"] == "EGO_VERALTET")
     assert "deprecated" in EGO_DEPRECATED
     d.job._kill_if_running()
+
+
+def test_asphalt_farbton_haken_vorschau_und_optionen(builder):
+    """Fahrbahnvorlage: Haken nur mit Vorlage aktiv, Vorschau getönt, Option asphalt_farbton (20.11.2026)."""
+    w, d, mode = builder
+    d.asphalt.setCurrentIndex(d.asphalt.findData("traeger"))
+    assert not d.asphalt_tone.isEnabled()
+    i = d.asphalt.findData("silverstone")
+    if i < 0:
+        return                          # Katalog ohne Silverstone (andere Fassung)
+    d.asphalt.setCurrentIndex(i)
+    assert d.asphalt_tone.isEnabled()
+    d.asphalt_tone.setChecked(False)
+    assert d.options()["asphalt_farbton"] == "neutral"
+    neutral = d.asphalt_preview.pixmap().toImage()
+    d.asphalt_tone.setChecked(True)
+    assert d.options()["asphalt_farbton"] == "vorlage"
+    getoent = d.asphalt_preview.pixmap().toImage()
+    if not neutral.isNull():
+        a, b = neutral.pixelColor(80, 80), getoent.pixelColor(80, 80)
+        assert b.blue() >= a.blue() and b.red() <= a.red()   # Silverstone: kühler

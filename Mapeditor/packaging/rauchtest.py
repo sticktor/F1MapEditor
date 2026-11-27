@@ -88,6 +88,16 @@ def main():
     zeile = r.stdout.decode("utf-8", "replace").strip().splitlines()
     assert r.returncode == 0 and zeile and json.loads(zeile[-1])["ok"], (r.returncode, zeile, r.stderr[-800:])
     print("[8] Arbeitsprozesse des Werkzeugkastens aus der EXE:", zeile[-1])
+    # 9. 3D-Ansicht (26.11.2026): Qt Quick 3D in der EXE, mit echter Grafik (offscreen zeichnet Qt Quick 3D nicht);
+    # öffnet kurz ein Fenster. Fehlte 0.5.1-Spec-bedingt ganz (QtQuick ausgeschlossen, Qt6Quick*.dll beschnitten).
+    env3d = umgebung()
+    env3d.pop("QT_QPA_PLATFORM", None)
+    env3d["MAPEDITOR_RAUCHTEST"] = "3d"
+    r = subprocess.run([str(EXE)], capture_output=True, env=env3d, timeout=600)
+    zeile = r.stdout.decode("utf-8", "replace").strip().splitlines()
+    ergebnis = json.loads(zeile[-1]) if zeile else {}
+    assert r.returncode == 0 and ergebnis.get("ok"), (r.returncode, ergebnis, r.stderr.decode("utf-8", "replace")[-800:])
+    print("[9] 3D-Ansicht in der EXE:", json.dumps({k: ergebnis.get(k) for k in ("netz_s", "farben", "szene")}))
     print("Rauchtest bestanden")
 
 

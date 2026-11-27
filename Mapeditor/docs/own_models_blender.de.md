@@ -11,11 +11,24 @@ Ausführliche englische Anleitung: [own_models_blender.md](own_models_blender.md
 - Kollision: Häkchen *Collision* in den Angaben des eigenen Modells setzt einen unsichtbaren Quader um die Grundfläche, an dem Autos abprallen. Standard aus; die KI kennt ihn nicht, Prüfregel UM-11 warnt, wenn er Fahrbahn oder Boxengasse berührt.
 - Texturen werden auf Zweierpotenzen und höchstens 1024 px gebracht (Standard, bis 2048 einstellbar).
 
+**Bewegte Teile (Animation):** Objekte animieren (Ort, Drehung, Skalierung), keine Knochen oder Shape Keys. Teile, die
+sich zusammen bewegen, an ein Objekt hängen (z. B. ein Empty „Rotor“ mit den Blättern als Kindern) und nur dieses
+animieren; Drehpunkt = Ursprung des animierten Objekts. Das Spiel wiederholt die Bewegung endlos: letztes Bild = erstes
+(Rotor 0° → 360°, Schlüssel linear). Nur die erste Animation (Aktion) der Datei zählt. Im Editor zeigen die Angaben die
+Animation und das Häkchen *Play animation* (Standard an; aus = Ruhelage). Die Kollisionsbox bewegt sich nicht (Warnung MO-08).
+
+**Bewegte Materialien:** Benutzerdefinierte Eigenschaft `f1_effect` am Material (Export mit *Include → Custom Properties*):
+`water` (Wasser mit laufenden Wellen, für flache Flächen), `scroll` (leuchtende, laufende Textur, z. B. LED-Band; Farbtextur
+= Lichtmuster), `flag` (wehendes Tuch; Farbtextur mit Alpha, Tuch unterteilen, doppelseitig). Dazu optional `f1_speed_u`,
+`f1_speed_v`, `f1_brightness` (scroll, Standard 250; Spiel: 250 Singapur, 750 Las Vegas Farbwechsel, 40.000 Neon, alle nachts; bei Tag ab 750) und `f1_speed` (Faktor für water). Fahne mit Motiv (Logo, Wappen,
+Schrift): `f1_speed_u` = `0`, sonst läuft das Motiv seitlich über das Tuch (Wehen bleibt). Wasser erhöht setzen (Becken
+auf Sockel) und vor Barrieren, in Bodenhöhe ist es aus dem Auto kaum zu sehen.
+
 **LODs:** Objekte `Name`, `Name_LOD1`, `Name_LOD2` in einer Datei (ohne Lücke) oder eigene Dateien über die Kommandozeile. Wechsel bei 10 % und 25 % der Sichtweite (2500 m).
 
 **Grenzen:** über 50.000 Dreiecke in LOD 0 Warnung (MO-02), über 250.000 Fehler (MO-01), alle eigenen Modelle zusammen über 256 MB Warnung (MO-06).
 
-**Export:** glTF 2.0, *glTF Binary (.glb)*, +Y Up, Apply Modifiers an, Materials: Export, Images: Automatic, keine Kompression (kein Draco), keine Animation, keine Skins.
+**Export:** glTF 2.0, *glTF Binary (.glb)*, +Y Up, Apply Modifiers an, Materials: Export, Images: Automatic, keine Kompression (kein Draco), keine Skins. Animation nur bei bewegten Teilen an, dann mit *Always Sample Animations*.
 
 **Im Editor:** Projekt in einem Ordner speichern, Reiter *Environment* (Umgebung) → *Modell importieren …* → Filter *Eigene Modelle* → platzieren, drehen, skalieren → Prüfen und bauen. *Eigenes Modell entfernen* löscht es wieder aus dem Projekt.
 

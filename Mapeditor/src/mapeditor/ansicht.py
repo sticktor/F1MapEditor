@@ -46,7 +46,7 @@ FEATURES = [
     ("unterer_bereich", N_("Areas"), N_("Profiles and analysis (bottom)"), N_("Tabs below the map"), True),
     ("querneigungsfeld", N_("Areas"), N_("Banking field"), N_("“Banking” field in the properties"), True),
     ("werkzeugleiste", N_("Areas"), N_("Toolbar"), N_("Buttons at the top"), True),
-    ("kopfzeile", N_("Areas"), N_("Header (project)"), N_("Project name, save state and folder"), True),
+    ("kopfzeile", N_("Areas"), N_("Project info"), N_("Project name, save state and folder in the status bar"), True),
     ("statuszeile", N_("Areas"), N_("Status bar"), N_("State, checksum and tool at the bottom"), True),
     ("reiter_hoehe", N_("Tabs"), N_("Height profile"), "", True),
     ("reiter_neigung", N_("Tabs"), N_("Banking"), "", True),
@@ -64,6 +64,9 @@ FEATURES = [
     ("letztes_projekt", N_("Automation"), N_("Open last project on start"), N_("Without an argument the editor "
                                                                                      "starts with the last opened "
                                                                                      "project"), False),
+    ("update_pruefen", N_("Automation"), N_("Check for updates on start"),
+     N_("At most once a day the editor asks GitHub for a new release (no personal data is sent). Help → Check for "
+        "updates … works any time"), True),
     ("startbildschirm", N_("Automation"), N_("Start screen for an empty project"), N_(("Choice of "
                                                                                        "Draw/Template/Suggestion")), True),
 ]

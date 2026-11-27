@@ -9,7 +9,7 @@ from __future__ import annotations
 from PySide6.QtCore import QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QIcon, QPixmap
 from PySide6.QtWidgets import (
-    QAbstractItemView, QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout, QFrame, QGridLayout, QGroupBox, QHBoxLayout,
+    QAbstractItemView, QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFormLayout, QFrame, QGridLayout, QGroupBox, QHBoxLayout,
     QLabel, QLineEdit, QListWidget, QListWidgetItem, QPushButton, QScrollArea, QSpinBox, QVBoxLayout, QWidget,
 )
 
@@ -46,6 +46,62 @@ def _spin(minimum, maximum, wert, schritt, nachkomma=1, suffix=""):
     return box
 
 
+class LibraryDialog(QDialog):
+    """Modellbibliothek (20.11.2026): Einträge auflisten, ins Projekt übernehmen oder löschen."""
+
+    def __init__(self, eintraege, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(tr("Model library"))
+        self.resize(520, 420)
+        self.eintraege = list(eintraege)
+        self.aktion = None
+        layout = QVBoxLayout(self)
+        hinweis = QLabel(tr("Own models saved from any project. Take one into this project: it is imported with its "
+                            "settings and appears under Own models."))
+        hinweis.setWordWrap(True)
+        layout.addWidget(hinweis)
+        self.list = QListWidget()
+        for e in self.eintraege:
+            extra = []
+            if e.get("animation"):
+                extra.append(tr("animated"))
+            if e.get("effekte"):
+                extra.append(", ".join(e["effekte"]))
+            if (e.get("optionen") or {}).get("kollision") == "quader":
+                extra.append(tr("collision"))
+            text = tr("{name} · {anzahl} triangles", name="usr_" + e["name"], anzahl=e.get("dreiecke", 0))
+            self.list.addItem(text + (" · " + " · ".join(extra) if extra else ""))
+        if not self.eintraege:
+            self.list.addItem(tr("The library is empty. Choose an own model and click “Save to library”."))
+            self.list.setEnabled(False)
+        layout.addWidget(self.list, 1)
+        knoepfe = QHBoxLayout()
+        self.take = QPushButton(tr("Take into project"))
+        self.delete = QPushButton(tr("Delete from library"))
+        schliessen = QPushButton(tr("Close"))
+        for b in (self.take, self.delete):
+            b.setEnabled(bool(self.eintraege))
+        self.take.clicked.connect(lambda: self._fertig("uebernehmen"))
+        self.delete.clicked.connect(lambda: self._fertig("loeschen"))
+        schliessen.clicked.connect(self.reject)
+        knoepfe.addWidget(self.take)
+        knoepfe.addWidget(self.delete)
+        knoepfe.addStretch(1)
+        knoepfe.addWidget(schliessen)
+        layout.addLayout(knoepfe)
+        if self.eintraege:
+            self.list.setCurrentRow(0)
+
+    def gewaehlt(self):
+        i = self.list.currentRow()
+        return self.eintraege[i] if 0 <= i < len(self.eintraege) else None
+
+    def _fertig(self, aktion):
+        if self.gewaehlt() is not None:
+            self.aktion = aktion
+            self.accept()
+
+
 class EnvironmentPanel(QScrollArea):
     model_chosen = Signal(object)            # Modell-Kennung zum Platzieren oder None
     preview_requested = Signal(str)          # Silhouette dieses Modells anfordern
@@ -53,6 +109,7 @@ class EnvironmentPanel(QScrollArea):
     import_requested = Signal()              # eigenes 3D-Modell (.glb/.gltf/.obj) ins Projekt übernehmen (M4)
     remove_model_requested = Signal(str)     # eigenes Modell (Name ohne usr_) aus dem Projekt entfernen
     collision_changed = Signal(str, bool)    # M5b: Kollisionsquader eines eigenen Modells an/aus (Name ohne usr_)
+    animation_changed = Signal(str, bool)    # A4: Animation eines eigenen Modells abspielen an/aus (Name ohne usr_)
     settings_changed = Signal()              # Form/Radius des Bepflanzens geändert
     properties_requested = Signal(dict)      # Felder für die gewählten Objekte {feld: wert}
     ground_cover_toggled = Signal(bool)
@@ -65,6 +122,10 @@ class EnvironmentPanel(QScrollArea):
     terrain_armed = Signal(object)           # "huegel"/"berge" zum Setzen per Klick oder None
     terrain_values_changed = Signal(dict)    # Höhe/Radius des gewählten Hügels/Bergs {feld: wert}
     terrain_delete_requested = Signal()
+    library_requested = Signal()             # Modellbibliothek öffnen (20.11.2026)
+    save_to_library_requested = Signal(str)  # eigenes Modell (Name ohne usr_) in die Bibliothek
+    plant_now_requested = Signal()           # Band/Innenfeld ohne Zeichnen bepflanzen (20.11.2026)
+    row_requested = Signal(dict)             # Reihe entlang der Strecke setzen (20.11.2026)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -82,6 +143,7 @@ class EnvironmentPanel(QScrollArea):
         root.addWidget(self._catalog_box(), 5)
         root.addWidget(self._detail_box(), 2)
         root.addWidget(self._scatter_box(), 4)
+        root.addWidget(self._row_box(), 3)
         # Die Auswahl (Eigenschaften der gewählten Objekte, Bodenbewuchs) und das Feld „Gelände“ sitzen im Hauptfenster
         # rechts bei den Eigenschaften; das Fenster fügt ``selection_box`` und ``terrain_box`` dort ein (sichtbar in den
         # Umgebungswerkzeugen).
@@ -120,7 +182,12 @@ class EnvironmentPanel(QScrollArea):
         self.import_button.clicked.connect(self.import_requested)
         row.addWidget(self.search, 1)
         row.addWidget(self.category)
+        self.library_button = QPushButton(tr("Library …"))
+        self.library_button.setToolTip(tr("Your model library across all projects: take a saved own model into this "
+                                          "project, or delete it from the library."))
+        self.library_button.clicked.connect(self.library_requested)
         row.addWidget(self.import_button)
+        row.addWidget(self.library_button)
         row.addWidget(self.reload_button)
         layout.addLayout(row)
         self.list = QListWidget()
@@ -159,9 +226,31 @@ class EnvironmentPanel(QScrollArea):
         self.collision_box.toggled.connect(self._collision_toggled)
         self.collision_box.hide()
         layout.addWidget(self.collision_box)
+        self.animation_box = QCheckBox(tr("Play animation"))
+        self.animation_box.setToolTip(tr("The model moves in the game as animated in Blender and repeats endlessly. "
+                                         "Off: it stands still in its rest pose. Applies to all objects of the model."))
+        self.animation_box.toggled.connect(self._animation_toggled)
+        self.animation_box.hide()
+        layout.addWidget(self.animation_box)
+        self.library_save_button = QPushButton(tr("Save to library"))
+        self.library_save_button.setToolTip(tr("Copy this own model with its settings (collision, animation, moving "
+                                               "materials) into your model library, to use it in other projects."))
+        self.library_save_button.clicked.connect(self._library_save_clicked)
+        self.library_save_button.hide()
+        layout.addWidget(self.library_save_button)
         layout.addWidget(self.remove_model_button)
         layout.addStretch(1)
         return box
+
+    def _library_save_clicked(self):
+        eintrag = self.index.get(self.armed_model() or "")
+        if eintrag and eintrag.get("quelle") == "projekt":
+            self.save_to_library_requested.emit(str(eintrag.get("name", ""))[len("usr_"):])
+
+    def _animation_toggled(self, an):
+        eintrag = self.index.get(self.armed_model() or "")
+        if eintrag and eintrag.get("quelle") == "projekt":
+            self.animation_changed.emit(str(eintrag.get("name", ""))[len("usr_"):], bool(an))
 
     def _collision_toggled(self, an):
         eintrag = self.index.get(self.armed_model() or "")
@@ -180,6 +269,8 @@ class EnvironmentPanel(QScrollArea):
         self.form_choice = QComboBox()
         self.form_choice.addItem(tr("Rectangle"), "rechteck")
         self.form_choice.addItem(tr("Brush"), "pinsel")
+        self.form_choice.addItem(tr("Band along the track"), "band")
+        self.form_choice.addItem(tr("Infield"), "innen")
         self.form_choice.currentIndexChanged.connect(self._form_changed)
         self.radius = _spin(2, 300, 30, 5, 0, " m")
         self.radius.setToolTip(tr("Brush radius: how wide the stroke is"))
@@ -220,12 +311,75 @@ class EnvironmentPanel(QScrollArea):
         row.addWidget(self.seed)
         row.addWidget(self.dice)
         form.addRow(row)
+        row = QHBoxLayout()
+        self.band_from = _spin(0, 30000, 0, 50, 0, " m")
+        self.band_to = _spin(0, 30000, 500, 50, 0, " m")
+        self.band_side = QComboBox()
+        for seite in umgebung.SEITEN:
+            self.band_side.addItem(tr(umgebung.SEITEN_NAMEN[seite]), seite)
+        row.addWidget(self.band_from)
+        row.addWidget(QLabel("–"))
+        row.addWidget(self.band_to)
+        row.addWidget(self.band_side)
+        self.band_row_label = QLabel(tr("Band from – to"))
+        self.band_row_label.setToolTip(tr("Stations in metres after the start/finish line (with an up-to-date "
+                                          "preview), side seen in driving direction"))
+        form.addRow(self.band_row_label, row)
+        self.band_width = _spin(5, 500, 80, 5, 0, " m")
+        self.band_width.setToolTip(tr("Width of the band, starting at “Distance to track” behind the wall"))
+        self.band_width_label = QLabel(tr("Band width"))
+        form.addRow(self.band_width_label, self.band_width)
+        self.plant_now = QPushButton(tr("Plant now"))
+        self.plant_now.setToolTip(tr("Plants the band or the infield with the models chosen in the catalogue "
+                                     "(one undo step, one group)"))
+        self.plant_now.clicked.connect(self.plant_now_requested)
+        form.addRow(self.plant_now)
         self.group_name = QLineEdit()
         self.group_name.setPlaceholderText(tr("Scatter 1, Scatter 2 …"))
         self.group_name.setToolTip(tr("Group name: a scatter can be selected and deleted together"))
         form.addRow(tr("Group"), self.group_name)
         self._form_changed()
         return box
+
+    def _row_box(self):
+        """Reihe entlang der Strecke (20.11.2026): Tribünen, Zäune, Fahnen in gleichem Abstand, ausgerichtet."""
+        box = QGroupBox(tr("Row along the track"))
+        form = QFormLayout(box)
+        form.setVerticalSpacing(3)
+        row = QHBoxLayout()
+        self.row_from = _spin(0, 30000, 0, 50, 0, " m")
+        self.row_to = _spin(0, 30000, 200, 50, 0, " m")
+        row.addWidget(self.row_from)
+        row.addWidget(QLabel("–"))
+        row.addWidget(self.row_to)
+        label = QLabel(tr("From – to"))
+        label.setToolTip(tr("Stations in metres after the start/finish line (with an up-to-date preview)"))
+        form.addRow(label, row)
+        self.row_step = _spin(1, 2000, 50, 5, 1, " m")
+        self.row_step.setToolTip(tr("Distance between two objects along the track"))
+        form.addRow(tr("Every"), self.row_step)
+        self.row_side = QComboBox()
+        for seite in umgebung.SEITEN:
+            self.row_side.addItem(tr(umgebung.SEITEN_NAMEN[seite]), seite)
+        form.addRow(tr("Side"), self.row_side)
+        self.row_distance = _spin(-100, 500, 15, 1, 1, " m")
+        self.row_distance.setToolTip(tr("Distance behind the wall (with preview), otherwise from the centreline"))
+        form.addRow(tr("Behind the wall"), self.row_distance)
+        self.row_orientation = QComboBox()
+        for art in umgebung.AUSRICHTUNGEN:
+            self.row_orientation.addItem(tr(umgebung.AUSRICHTUNG_NAMEN[art]), art)
+        form.addRow(tr("Orientation"), self.row_orientation)
+        self.row_button = QPushButton(tr("Place row"))
+        self.row_button.setToolTip(tr("Places the first model chosen in the catalogue along the track "
+                                      "(one undo step, one group)"))
+        self.row_button.clicked.connect(lambda: self.row_requested.emit(self.row_settings()))
+        form.addRow(self.row_button)
+        return box
+
+    def row_settings(self):
+        return {"von_s": self.row_from.value(), "bis_s": self.row_to.value(), "schritt_m": self.row_step.value(),
+                "seite": self.row_side.currentData(), "abstand_m": self.row_distance.value(),
+                "ausrichtung": self.row_orientation.currentData(), "gruppe": self.group_name.text().strip()}
 
     def _terrain_box(self):
         box = QGroupBox(tr("Terrain"))
@@ -350,15 +504,21 @@ class EnvironmentPanel(QScrollArea):
         self.ground_box.setToolTip(tr(("How the build puts the object on the ground. Automatic: the footprint stands "
                                        "on the lowest ground point below it (nothing floats on slopes) and models "
                                        "whose geometry starts above their origin, e.g. big screens, are lowered onto "
-                                       "the ground. Model origin: as before 15 Nov 2026.")))
+                                       "the ground. Model origin: as before 15 Nov 2026.")) + " " + tr(
+            "Foundation: the build levels the ground under the object to its highest point (objects on slopes)."))
         self.ground_box.activated.connect(lambda _i: self._send("boden", self.ground_box.currentData()))
         self.scale_box = _spin(umgebung.SKALA_MIN, umgebung.SKALA_MAX, 1, 0.1, 2)
+        self.span_box = QCheckBox(tr("Over the track"))
+        self.span_box.setToolTip(tr("The object stands over the road on purpose (gate, bridge, banner): the check "
+                                    "no longer reports it as standing on the road"))
+        self.span_box.toggled.connect(lambda on: self._send("ueber_fahrbahn", bool(on)))
         self.group = QLineEdit()
         self.group.setToolTip(tr("Group (scatter); empty = none"))
         form.addRow(tr("Height above ground"), self.height_box)
         form.addRow(tr("Rotation"), self.rotation_box)
         form.addRow(tr("Ground"), self.ground_box)
         form.addRow(tr("Object scale"), self.scale_box)
+        form.addRow("", self.span_box)
         form.addRow(tr("Group"), self.group)
         layout.addLayout(form)
         self.front_text = QLabel()
@@ -494,10 +654,15 @@ class EnvironmentPanel(QScrollArea):
     def _show_details(self, modell):
         eintrag = self.index.get(modell) if modell else None
         self.remove_model_button.setVisible(bool(eintrag) and eintrag.get("quelle") == "projekt")
+        self.library_save_button.setVisible(bool(eintrag) and eintrag.get("quelle") == "projekt")
         self.collision_box.setVisible(bool(eintrag) and eintrag.get("quelle") == "projekt" and "kollision" in eintrag)
         self.collision_box.blockSignals(True)
         self.collision_box.setChecked(bool(eintrag) and eintrag.get("kollision") == "quader")
         self.collision_box.blockSignals(False)
+        self.animation_box.setVisible(bool(eintrag) and eintrag.get("quelle") == "projekt" and bool(eintrag.get("animiert")))
+        self.animation_box.blockSignals(True)
+        self.animation_box.setChecked(bool(eintrag) and bool(eintrag.get("animation")))
+        self.animation_box.blockSignals(False)
         if not eintrag:
             self.details.setText(tr("No model chosen.") if not modell else
                                  tr("{modell}\nNot in the catalogue.", modell=umgebung.kurzname(modell)))
@@ -513,6 +678,15 @@ class EnvironmentPanel(QScrollArea):
             lines.append(tr("Own model from this project ({datei})", datei=eintrag.get("datei", "")))
             if eintrag.get("dreiecke") is not None:
                 lines.append(tr("{anzahl} triangles", anzahl=zahl(eintrag["dreiecke"], 0)))
+            effekte = eintrag.get("effekte") or {}
+            if effekte:
+                namen = {"wasser": tr("water"), "lauftext": tr("scrolling light"), "fahne": tr("waving flag")}
+                lines.append(tr("Moving materials: {liste}", liste=", ".join(
+                    "%s (%s)" % (m, namen.get(a, a)) for m, a in effekte.items())))
+            info = eintrag.get("animation_info") or {}
+            if info:
+                lines.append(tr("Animation {name}: {laenge} s, {teile} moving parts", name=info.get("name", ""),
+                                laenge=zahl(info.get("laenge_s") or 0, 1), teile=info.get("knoten", 0)))
             lines += ["⚠ " + meldung(h) for h in (eintrag.get("hinweise") or [])[:4]]
         else:
             if eintrag.get("quelle"):
@@ -541,7 +715,12 @@ class EnvironmentPanel(QScrollArea):
 
     # ------------------------------------------------------------------ Bepflanzen
     def _form_changed(self, *_args):
-        self.radius.setEnabled(self.form_choice.currentData() == "pinsel")
+        form = self.form_choice.currentData()
+        self.radius.setEnabled(form == "pinsel")
+        for widget in (self.band_from, self.band_to, self.band_side, self.band_width, self.band_row_label,
+                       self.band_width_label):
+            widget.setEnabled(form == "band")
+        self.plant_now.setEnabled(form in ("band", "innen"))
         self.settings_changed.emit()
 
     def roll_seed(self):
@@ -552,7 +731,9 @@ class EnvironmentPanel(QScrollArea):
         return {"form": self.form_choice.currentData(), "radius": self.radius.value(), "dichte": self.density.value(),
                 "abstand_fahrbahn": self.track_distance.value(), "abstand_objekte": self.object_distance.value(),
                 "skala": (self.scale_min.value(), self.scale_max.value()), "drehung_zufall": self.random_rotation.isChecked(),
-                "seed": self.seed.value(), "gruppe": self.group_name.text().strip()}
+                "seed": self.seed.value(), "gruppe": self.group_name.text().strip(),
+                "band_von": self.band_from.value(), "band_bis": self.band_to.value(),
+                "band_seite": self.band_side.currentData(), "band_breite": self.band_width.value()}
 
     # ------------------------------------------------------------------ Auswahl
     def show_selection(self, objekte, index, anzahl=0, bodenbewuchs=None, editierbar=True, korrekturen=None):
@@ -561,7 +742,7 @@ class EnvironmentPanel(QScrollArea):
         try:
             first = objekte[0] if objekte else None
             for widget in (self.height_box, self.rotation_box, self.scale_box, self.group, self.delete_button,
-                           self.ground_box, self.face_button, self.front_turn):
+                           self.ground_box, self.face_button, self.front_turn, self.span_box):
                 widget.setEnabled(first is not None and editierbar)
             korrekturen = korrekturen or {}
             self.front_reset.setEnabled(bool(first and editierbar and first["modell"] in korrekturen))
@@ -584,6 +765,7 @@ class EnvironmentPanel(QScrollArea):
                 self.height_box.setValue(first.get("hoehe_m", 0.0))
                 self.rotation_box.setValue(first.get("drehung_grad", 0.0))
                 self.scale_box.setValue(first.get("skala", 1.0))
+                self.span_box.setChecked(bool(first.get("ueber_fahrbahn")))
                 self.group.setText(first.get("gruppe", ""))
             has_group = bool(first and first.get("gruppe"))
             self.group_button.setEnabled(has_group)

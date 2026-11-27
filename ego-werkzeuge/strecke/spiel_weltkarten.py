@@ -194,6 +194,11 @@ def innenkarten(a, arbeit, npz, tag="bau", flecken_bis_m=None, bewuchs=True):
     gras_rgb = np.array([128.0, 128.0, 98.0])
     makro = gras_rgb[None, None, :] * (0.88 + 0.24 * _rauschen(5, 16, 1.5))[..., None]
     makro = makro * (1.0 - 0.2 * erde[..., None]) + np.array([140.0, 124.0, 100.0]) * 0.2 * erde[..., None]
+    # 20.11.2026 (Bild des Nutzers, Feature GP): Fahrbahnränder olivgrün-grau. Die Karte hat ≈ 2 m je Texel, der Asphalt
+    # filtert am Rand (in der Ferne über Mip-Stufen noch breiter) die Grasfarbe mit B 98 ein. Deshalb neben harten Flächen
+    # erst neutral (wie der Asphalt), Gras ab 6 m über weitere 6 m einblenden.
+    saum = np.clip((d_hart - 6.0) / 6.0, 0, 1)[..., None]
+    makro = np.array([128.0, 128.0, 127.0]) * (1.0 - saum) + makro * saum
     makro[fahrbahn] = (128, 128, 127)
     makro[kies] = (141, 141, 141)
     makro[mauer] = (132, 131, 131)
@@ -277,8 +282,62 @@ def trackinfo_bild(z, w, breite_m, hoehe=64, spalten=16384):
     return bild
 
 
-def hoehenraster(pos, tri, x0, z0, kante, n):
-    """Höhe je Texel (n×n) aus einem Dreiecksnetz, Texelmitte, ohne Netz NaN."""
+def hoehenraster(pos, tri, x0, z0, kante, n, block=20000):
+    """Höhe je Texel (n×n) aus einem Dreiecksnetz, Texelmitte, ohne Netz NaN.
+
+    Vektorisiert (26.11.2026, Mapeditor/docs/3d_ladeperformance.md): Dreiecke nach Größe ihres Texelrechtecks
+    gebündelt, dieselbe Rechnung wie ``_hoehenraster_schleife``; liegen Texel in mehreren Dreiecken (Kanten), gilt wie
+    dort das spätere Dreieck. Ergebnis bitgleich zur Schleife, rund 20-mal schneller."""
+    h = np.full((n, n), np.nan)
+    pos = np.asarray(pos)                 # Datentyp wie die Schleife (float32-Netze rechnen in float32)
+    tri = np.asarray(tri).reshape(-1, 3)
+    px = (pos[:, 0] - x0) / kante * n - 0.5
+    pz = (pos[:, 2] - z0) / kante * n - 0.5
+    xs, zs, ys = px[tri], pz[tri], pos[tri, 1]
+    i0 = np.maximum(np.floor(xs.min(1)).astype(np.int64), 0)
+    i1 = np.minimum(np.ceil(xs.max(1)).astype(np.int64), n - 1)
+    j0 = np.maximum(np.floor(zs.min(1)).astype(np.int64), 0)
+    j1 = np.minimum(np.ceil(zs.max(1)).astype(np.int64), n - 1)
+    d = (zs[:, 1] - zs[:, 2]) * (xs[:, 0] - xs[:, 2]) + (xs[:, 2] - xs[:, 1]) * (zs[:, 0] - zs[:, 2])
+    gueltig = (i1 >= i0) & (j1 >= j0) & (np.abs(d) >= 1e-12)
+    sx = np.zeros(len(tri), np.int64)
+    sz = np.zeros(len(tri), np.int64)
+    sx[gueltig] = np.ceil(np.log2(i1[gueltig] - i0[gueltig] + 1)).astype(np.int64)
+    sz[gueltig] = np.ceil(np.log2(j1[gueltig] - j0[gueltig] + 1)).astype(np.int64)
+    stufe = sx * 64 + sz
+    flach, welche, werte = [], [], []
+    for s in np.unique(stufe[gueltig]):
+        kx, kz = 1 << int(s // 64), 1 << int(s % 64)
+        oz, ox = np.mgrid[0:kz, 0:kx]
+        auswahl = np.flatnonzero(gueltig & (stufe == s))
+        je = max(1, block // (kx * kz))
+        for a in range(0, len(auswahl), je):
+            t = auswahl[a:a + je]
+            xx = i0[t, None, None] + ox
+            zz = j0[t, None, None] + oz
+            innen = (xx <= i1[t, None, None]) & (zz <= j1[t, None, None])
+            X, Z, Y, D = xs[t][:, :, None, None], zs[t][:, :, None, None], ys[t][:, :, None, None], d[t, None, None]
+            l0 = ((Z[:, 1] - Z[:, 2]) * (xx - X[:, 2]) + (X[:, 2] - X[:, 1]) * (zz - Z[:, 2])) / D
+            l1 = ((Z[:, 2] - Z[:, 0]) * (xx - X[:, 2]) + (X[:, 0] - X[:, 2]) * (zz - Z[:, 2])) / D
+            l2 = 1.0 - l0 - l1
+            m = innen & (l0 >= -1e-9) & (l1 >= -1e-9) & (l2 >= -1e-9)
+            if not m.any():
+                continue
+            wert = l0 * Y[:, 0] + l1 * Y[:, 1] + l2 * Y[:, 2]
+            flach.append((zz * n + xx)[m])
+            welche.append(np.broadcast_to(t[:, None, None], m.shape)[m])
+            werte.append(wert[m])
+    if flach:
+        flach, welche, werte = np.concatenate(flach), np.concatenate(welche), np.concatenate(werte)
+        folge = np.argsort(welche, kind="stable")              # Reihenfolge der Dreiecke wie in der Schleife
+        flach, werte = flach[folge][::-1], werte[folge][::-1]
+        _, letzte = np.unique(flach, return_index=True)        # erstes Vorkommen rückwärts = letztes Dreieck
+        h.ravel()[flach[letzte]] = werte[letzte]
+    return h
+
+
+def _hoehenraster_schleife(pos, tri, x0, z0, kante, n):
+    """Ursprüngliche Fassung (Schleife je Dreieck), Referenz für den Test."""
     h = np.full((n, n), np.nan)
     px = (pos[:, 0] - x0) / kante * n - 0.5
     pz = (pos[:, 2] - z0) / kante * n - 0.5
@@ -358,28 +417,39 @@ def aussen_farben(h, m_je_texel, ausschnitt, farben=None):
     return np.clip(farbe, 0, 255).astype(np.uint8)
 
 
-def aussenkarten(a, arbeit, tag, farben=None):
-    """Ersetzt beide Karten des Außenterrains, tauscht die Normalenkarte von ``por_terrain_c`` gegen die neutrale."""
+def aussen_netze(a) -> dict:
+    """{Materialname: TerrainNetz} des Außenterrains (Spielkoordinaten)."""
     r = next(x for x in a if x.resource_type == "TerrainRes" and "outer_terrain" in x.identifier)
     t = grafik.Terrain.aus_bytes(r.data())
-    netze = {}
-    for n in grafik_terrain.terrain_lesen(a, r.identifier):
-        netze[t.materialien[n.material].rsplit("/", 1)[-1]] = n
+    return {t.materialien[n.material].rsplit("/", 1)[-1]: n for n in grafik_terrain.terrain_lesen(a, r.identifier)}
+
+
+def aussen_bilder(netze, farben=None, groesse=AUSSEN_N) -> dict:
+    """{Material: (RGB, Loch, Höhe, Netzquadrat in m)} der Außenterrain-Karten (Bau und 3D-Ansicht des Mapeditors)."""
     voll = netze["por_terrain_c.material"].positionen
     vx0, vz0 = float(voll[:, 0].min()), float(voll[:, 2].min())
     vk = float(voll[:, 0].max()) - vx0
     erg = {}
-    for material, (karte, alpha) in AUSSEN_NETZE.items():
+    for material in AUSSEN_NETZE:
         n = netze[material]
         x0, z0 = float(n.positionen[:, 0].min()), float(n.positionen[:, 2].min())
         k = float(n.positionen[:, 0].max()) - x0
         h = hoehenraster(n.positionen, n.dreiecke, x0, z0, k, 1024)
         fein = np.asarray(Image.fromarray(np.nan_to_num(h, nan=float(np.nanmean(h))).astype(np.float32), "F")
-                          .resize((AUSSEN_N, AUSSEN_N), Image.BICUBIC), np.float64).copy()
+                          .resize((groesse, groesse), Image.BICUBIC), np.float64).copy()
         loch = np.asarray(Image.fromarray(np.isnan(h).astype(np.uint8) * 255, "L")
-                          .resize((AUSSEN_N, AUSSEN_N), Image.NEAREST)) > 0
+                          .resize((groesse, groesse), Image.NEAREST)) > 0
         fein[loch] = np.nan
-        rgb = aussen_farben(fein, k / AUSSEN_N, ((x0 - vx0) / vk, (z0 - vz0) / vk, k / vk), farben)
+        rgb = aussen_farben(fein, k / groesse, ((x0 - vx0) / vk, (z0 - vz0) / vk, k / vk), farben)
+        erg[material] = (rgb, loch, fein, k)
+    return erg
+
+
+def aussenkarten(a, arbeit, tag, farben=None):
+    """Ersetzt beide Karten des Außenterrains, tauscht die Normalenkarte von ``por_terrain_c`` gegen die neutrale."""
+    erg = {}
+    for material, (rgb, loch, fein, k) in aussen_bilder(aussen_netze(a), farben).items():
+        karte, alpha = AUSSEN_NETZE[material]
         bild = np.dstack([rgb, np.full((AUSSEN_N, AUSSEN_N), alpha, np.uint8)])
         e = karte_schreiben(a, karte, bild, arbeit, tag, kennung=material_textur_kennung(a, material))
         e.update(netz_quadrat_m=round(k, 1), mittel_rgb=[round(float(v), 1) for v in rgb[~loch].mean(0)],

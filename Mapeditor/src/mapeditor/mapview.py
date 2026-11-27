@@ -20,9 +20,14 @@ from .input_geometry import input_geometry
 
 
 MATERIALS = {0: "#596675", 1: "#D65B65", 2: "#436A50", 3: "#B49768", 4: "#A8B2BB", 5: "#48596C", 6: "#F5F5F0",
-             7: "#6B7684"}
+             7: "#6B7684", 8: "#F5F5F0", 9: "#9AA3AD", 10: "#F2C200", 11: "#E8E8E8", 12: "#E8E8E8", 13: "#8E3A40",
+             14: "#4FB35A"}
+#: Wulstrandsteine (Sausage Kerbs) auf der Karte
+SAUSAGE_COLOR = "#F2C200"
 MATERIAL_NAMES = {0: N_("Asphalt"), 1: N_("Kerb"), 2: N_("Grass"), 3: N_("Gravel"), 4: N_("Wall"), 5: N_("Pit lane"),
-                  6: N_("Edge line"), 7: N_("Asphalt run-off")}
+                  6: N_("Edge line"), 7: N_("Asphalt run-off"), 8: N_("Grid box"), 9: N_("Garage"),
+                  10: N_("Sausage kerb"), 11: N_("Kerb end piece"), 12: N_("Kerb end piece"), 13: N_("Negative kerb"),
+                  14: N_("Artificial grass")}
 
 ROTATE_HANDLE_PX = 30     # Abstand des Drehgriffs über dem Auswahlkasten
 SNAP_DEG = 15.0           # Raster beim Drehen mit Umschalt
@@ -113,6 +118,7 @@ class MapView(QGraphicsView):
         self.rotate_start = 0.0
         self.rotate_angle = 0.0
         self.station = 0.0
+        self.kamera_3d = None        # (x, z, Richtung in Grad) der Kamera der 3D-Ansicht: Sichtkegel
         self._preview_items = []
         self._preview_cache = None
         self._preview_obj = None
@@ -201,6 +207,10 @@ class MapView(QGraphicsView):
                         polygon = [side["edges"][band][i] for i in ids] + [side["edges"][band + 1][i] for i in reversed(ids)]
                         add((path_for(polygon, True), no_pen, QColor(MATERIALS[material])))
                         start = end
+            for outline in preview.get("negative_kerbs") or []:    # abgesenkte Randsteine
+                add((path_for(outline, True), no_pen, QColor(MATERIALS[13])))
+            for sausage in preview.get("sausages") or []:          # Wulstrandsteine (Sausage Kerbs)
+                add((path_for(sausage["outline"], True), cosmetic("#3B2F05", 1), QColor(SAUSAGE_COLOR)))
         road = preview["left"] + list(reversed(preview["right"]))
         spanne = hoehenfarbe.bereich(preview, self.color_mode) if self.height_colors else None
         werte = hoehenfarbe.werte(preview, self.color_mode) if spanne else []
@@ -414,6 +424,16 @@ class MapView(QGraphicsView):
         to_view = self._to_view()
         width, height = self.viewport().width(), self.viewport().height()
         self._draw_env(painter, to_view, width, height)
+        if self.kamera_3d is not None:      # Sichtkegel der 3D-Ansicht (wie die Minikarte im Warcraft-3-Editor)
+            kx, kz, grad = self.kamera_3d
+            spitze = QPointF(*to_view(kx, kz))
+            punkte = [spitze]
+            for d in (-30.0, 30.0):
+                w = math.radians(grad + d)
+                punkte.append(QPointF(*to_view(kx + 120.0 * math.cos(w), kz - 120.0 * math.sin(w))))
+            painter.setPen(QPen(QColor(255, 140, 20), 2))
+            painter.setBrush(QColor(255, 140, 20, 60))
+            painter.drawPolygon(QPolygonF(punkte))
         if self.trace is not None and self.mode == "nachzeichnen":
             self.trace.zeichne(painter, to_view)
         selected_set = self.document.selected_indices
@@ -1486,7 +1506,7 @@ class MapView(QGraphicsView):
     def _env_press(self, event, scene_point):
         document, position = self.document, event.position()
         if self.mode == "streuen":
-            if document.env_editable:
+            if document.env_editable and self.env_form in ("rechteck", "pinsel"):   # Band/Innenfeld: Knopf im Reiter
                 self.env_area = {"form": self.env_form, "a": scene_point, "b": scene_point,
                                  "punkte": [(scene_point.x(), scene_point.y())]}
                 self.viewport().update()

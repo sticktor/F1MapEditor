@@ -132,12 +132,22 @@ def _modell(args):
                 if temp:
                     shutil.rmtree(temp, ignore_errors=True)
         if args.aktion == 'hinzufuegen':
+            args.effekte = _effekte(args.effekt)
             optionen = {k: getattr(args, k) for k in _MODELL_OPTIONEN if getattr(args, k) is not None}
+            if args.aktion == 'aendern' and 'effekte' in optionen:     # mit bestehenden Effekten zusammenführen
+                alt = dict(E.eintrag(E.laden(args.projekt), E.modellname(args.name)).get('effekte') or {})
+                alt.update(optionen['effekte'])
+                optionen['effekte'] = {k: v for k, v in alt.items() if v is not None}
             e = E.hinzufuegen(args.projekt, args.datei, name=args.name, lods=args.lod or (), ersetzen=args.ersetzen, **optionen)
             _statistik_zeigen('%s%s hinzugefügt (%s)' % (E.PRAEFIX, e['name'], E.tabelle_pfad(args.projekt)), e['statistik'])
             return 0
         if args.aktion == 'aendern':
+            args.effekte = _effekte(args.effekt)
             optionen = {k: getattr(args, k) for k in _MODELL_OPTIONEN if getattr(args, k) is not None}
+            if args.aktion == 'aendern' and 'effekte' in optionen:     # mit bestehenden Effekten zusammenführen
+                alt = dict(E.eintrag(E.laden(args.projekt), E.modellname(args.name)).get('effekte') or {})
+                alt.update(optionen['effekte'])
+                optionen['effekte'] = {k: v for k, v in alt.items() if v is not None}
             e = E.aendern(args.projekt, E.modellname(args.name), **optionen)
             print('%s%s geändert: %s' % (E.PRAEFIX, e['name'], ', '.join('%s=%s' % (k, e[k]) for k in sorted(optionen))))
             return 0
@@ -169,7 +179,32 @@ def _modell(args):
     return 1
 
 
-_MODELL_OPTIONEN = ('kategorie', 'vorne_grad', 'sichtweite_m', 'textur_max', 'textur_format', 'normalen', 'kollision')
+_MODELL_OPTIONEN = ('kategorie', 'vorne_grad', 'sichtweite_m', 'textur_max', 'textur_format', 'normalen', 'kollision',
+                    'animation', 'effekte')
+
+
+def _effekte(liste):
+    """``--effekt MATERIAL=ART[:u=0.1,v=0,helligkeit=250,tempo=1]`` (mehrfach) → ``effekte``; ``MATERIAL=keiner`` entfernt."""
+    if not liste:
+        return None
+    aus = {}
+    for eintrag in liste:
+        if '=' not in eintrag:
+            raise E.ModellFehler('--effekt erwartet MATERIAL=ART, nicht %r' % eintrag)
+        mat, rest = eintrag.split('=', 1)
+        art, _, werte = rest.partition(':')
+        if art == 'keiner':
+            aus[mat] = None
+            continue
+        e = {'art': art}
+        for paar in filter(None, werte.split(',')):
+            k, _, v = paar.partition('=')
+            try:
+                e[k] = float(v)
+            except ValueError:
+                raise E.ModellFehler('--effekt: %s=%s ist keine Zahl' % (k, v))
+        aus[mat] = e
+    return aus
 
 
 def _modell_optionen(p):
@@ -181,6 +216,10 @@ def _modell_optionen(p):
     p.add_argument('--normalen', choices=('gl', 'dx'), help='Konvention der Normalenkarten (Blender/glTF: gl)')
     p.add_argument('--kollision', choices=('keine', 'quader'),
                    help='M5b: Grundriss-Box als Mauerflächen (SCON) in der Fahrphysik; Standard keine')
+    p.add_argument('--animation', choices=('an', 'aus'),
+                   help='A2: glTF-Animation im Spiel abspielen (an, Standard) oder Ruhelage (aus)')
+    p.add_argument('--effekt', action='append', metavar='MATERIAL=ART[:u=…,v=…,helligkeit=…,tempo=…]',
+                   help='A3: bewegtes Material (wasser, lauftext, fahne; keiner entfernt), mehrfach möglich')
 
 
 def main(argv=None):

@@ -72,6 +72,7 @@ UMG_OHNE_BODEN;UM-10;Environment object left out: no ground under it;Umgebungsob
 UMG_KOLLISION_FAHRBAHN;UM-11;Collision box of an own model overlaps the road or the pit lane;Kollisionsbox eines eigenen Modells überdeckt Fahrbahn oder Boxengasse;자체 모델의 충돌 상자가 노면 또는 피트 레인과 겹침
 GRID_IN_KURVE;SA-01;Starting grid is longer than the straight: grid slots lie in a corner or on banking;Startaufstellung länger als die Gerade: Startplätze liegen in einer Kurve oder auf Querneigung;출발 그리드가 직선보다 김: 그리드 자리가 코너나 뱅크 위에 있음
 BOX_BEGRENZT;BO-06;Pit lane shortened to stay on the straight;Boxengasse gekürzt, damit sie auf der Geraden bleibt;직선에 머물도록 피트 레인을 줄임
+BOX_ANZAHL_ANGEHOBEN;BO-07;Fewer pit boxes than the carrier's teams – the build places 11 boxes;Weniger Boxen als Teams im Träger – der Bau setzt 11 Boxen;트랙 캐리어의 팀 수보다 피트 박스가 적음 – 빌드에서 박스 11개를 배치함
 KI_OHNE_BREMSZONE;KI-08;No braking zone on the lap: the AI drives flat out all the way round;Keine Bremszone auf der Runde: Die KI fährt die ganze Runde Vollgas;랩에 브레이킹 존이 없음: AI가 한 바퀴 내내 풀 스로틀로 달림
 MOD_DATEI;MO-01;Own model cannot be used: file missing, unreadable or too large;Eigenes Modell nicht verwendbar: Datei fehlt, unlesbar oder zu groß;
 MOD_DREIECKE;MO-02;Own model has many triangles (more than 50,000 in LOD 0);Eigenes Modell hat viele Dreiecke (über 50.000 in LOD 0);
@@ -80,3 +81,5 @@ MOD_URSPRUNG;MO-04;Origin of an own model lies far beside the model;Ursprung ein
 MOD_HINWEIS;MO-05;Note on an own model (adapted or left out by the conversion);Hinweis zu einem eigenen Modell (von der Umsetzung angepasst oder ausgelassen);
 MOD_SPEICHER;MO-06;Own models need a lot of memory (more than 256 MB);Eigene Modelle brauchen viel Speicher (über 256 MB);
 MOD_UNBENUTZT;MO-07;Own model is not placed anywhere;Eigenes Modell ist nirgends platziert;
+MOD_ANIM_KOLLISION;MO-08;Own model moves, but its collision box stays at the rest pose;Eigenes Modell bewegt sich, seine Kollisionsbox bleibt aber in der Ruhelage;
+WULST_AUF_IDEALLINIE;WU-01;Sausage kerb within reach of the racing line: cars that use the edge of the track hit it;Wulstrandstein in Reichweite der Ideallinie: Autos, die den Fahrbahnrand nutzen, treffen ihn;레이싱 라인 가까이에 소시지 연석: 트랙 가장자리를 쓰는 차가 부딪힘

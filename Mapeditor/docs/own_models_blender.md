@@ -24,7 +24,7 @@ German short version: [own_models_blender.de.md](own_models_blender.de.md)
 | UV | One UV map (the first one is used). Textures can tile (UV outside 0 … 1) |
 | Normals | Smooth shading is kept. Missing normals are calculated from the faces (a note tells you) |
 
-Not used: animation, skinning, armatures, shape keys, cameras, lights, vertex colours, a second UV map.
+Not used: skinning, armatures, shape keys, cameras, lights, vertex colours, a second UV map. Moving parts (object animation) are possible, see [6. Animation](#6-animation-moving-parts).
 
 ## 2. Materials and textures
 
@@ -92,7 +92,7 @@ Many instances of a heavy model cost frame rate. Use a low-poly version for obje
 | Geometry | **Apply Modifiers** on; UVs on; Normals on; Tangents off; Vertex Colour off; Materials: **Export** |
 | Geometry → Compression | **Off** (no Draco) |
 | Geometry → Images | **Automatic** (PNG/JPEG) |
-| Animation | everything off (Animation, Shape Keys, Skinning) |
+| Animation | **off** for static models. For moving parts (section 6): **Animation on**, *Always Sample Animations* on, Shape Keys and Skinning off |
 
 Save the file anywhere; the editor copies it into the project.
 
@@ -104,8 +104,9 @@ Save the file anywhere; the editor copies it into the project.
    notes tell you what the conversion changes or leaves out (for example a missing normal map or a reduced texture).
 4. Place it like any game object: pick it, click in the map, then move, rotate (round handle, R, Ctrl+wheel) and scale it.
    Check the front arrow and use *Face the track* (T) if the model should look at the track.
-5. Run **Check and build**. The checks MO-01 … MO-07 report problems with own models (unusable file, many triangles,
-   implausible size, origin beside the model, notes on the conversion, too much memory, model not placed). Check
+5. Run **Check and build**. The checks MO-01 … MO-08 report problems with own models (unusable file, many triangles,
+   implausible size, origin beside the model, notes on the conversion, too much memory, model not placed, moving model
+   with a collision box). Check
    UM-11 warns if a collision box touches the road or the pit lane. The build
    creates the game resources of the model and puts them in the package, which then contains everything of your model.
 
@@ -113,6 +114,9 @@ Save the file anywhere; the editor copies it into the project.
 footprint (rotated and scaled like each placed object). Cars bounce off it like off a wall. It is off by default, the
 AI does not know the box, and check UM-11 warns if a box touches the road or the pit lane. Keep collision objects
 beside the track (grass, gravel), not on it.
+
+**Animation:** if the file contains an animation (section 6), the details show *Animation name: length, moving parts*
+and the box *Play animation* (on by default). Off, the model stands still in its rest pose.
 
 *Remove own model* deletes the model and its files from the project; objects already placed stay and are reported as
 unknown model until you delete them. If you change the `.glb` in Blender, import it again with the same name to replace it.
@@ -130,8 +134,59 @@ at any time.
 Per model, `modelle.json` has these optional fields (defaults in brackets): `kategorie` (`sonstiges`, the catalogue
 category), `vorne_grad` (270, the front), `sichtweite_m` (2500, view distance), `lod_abstaende` (automatic, own switching
 distances), `textur_max` (1024), `textur_format` (`bc7`, or `bc1` for half the size), `normalen` (`gl`, or `dx`),
-`kollision` (`keine`, or `quader` for a box collision). A placed object in `umgebung.json` can override `kollision`. Edit them
+`kollision` (`keine`, or `quader` for a box collision), `animation` (`an`, or `aus` for the rest pose). A placed object in `umgebung.json` can override `kollision`. Edit them
 with the editor closed, or use the command line tool. Do not rename the files by hand.
+
+## 6. Animation (moving parts)
+
+A model can move in the game: a wind turbine, a ferris wheel, a flag pole that turns, a floating stone that bobs. The
+game moves **whole parts** (objects); it does not bend meshes. So animate **objects**, not bones or shape keys.
+
+| Topic | Rule |
+|---|---|
+| What moves | Location, rotation and scale of **objects**. Parent the parts that move together to one object (an *Empty* works well) and animate that one. Children follow their parent |
+| What stays | Objects without animation and without an animated parent stand still (mast, base) |
+| Pivot | The pivot is the **origin of the animated object**. Put the origin of a rotor on its hub before you animate it |
+| Loop | The game repeats the animation endlessly. Make the **last frame equal the first** (for a rotor: 0° → 360°) so the loop has no jump |
+| Interpolation | Linear, constant and Bézier keys all work (the export samples them). For an even rotation set the keys to **Linear** |
+| Length | Up to 18 minutes; a few seconds to a minute is typical. Times are rounded to 1/60 s |
+| One animation | Only the first animation (action) in the file is used; a note tells you if there are more |
+| Collision | The collision box (*Collision*) does not move. It stays around the rest pose, check MO-08 warns. Give collision only to a fixed base |
+| LOD | LOD objects of a moving part must be children of the same animated object (`Rotor`, `Blade_LOD1` as child of `Rotor`) |
+| Not possible | Armatures/skinning, shape keys (morph targets), animated materials or textures, sound, starting the movement on an event |
+
+Export as in section 4 with **Animation on** and *Always Sample Animations* on. Example: a wind turbine with a fixed mast
+and nacelle, an Empty `Rotor` at the hub with three blades as children, keys on the rotation of `Rotor` at frame 1 (0°)
+and frame 97 (360°), linear, 24 fps = 4 s per turn.
+
+In the editor the details of the model show the animation and the box *Play animation*. The build places the model as an
+animated object; the bounding box covers the whole movement, so moving parts do not disappear at the edge of the screen.
+
+## 7. Moving materials (water, scrolling light, flag)
+
+Some surfaces move by themselves in the game, without animation: water ripples, an LED band runs, a flag waves. Mark
+the material in Blender with a **custom property** (Material Properties → Custom Properties → *New*, type *String* or
+*Float*) and export with *Include → Custom Properties* on:
+
+| Property | Value | Effect |
+|---|---|---|
+| `f1_effect` | `water` | Water with two moving ripple layers (copy of the carrier's lake material). Base colour texture and normal map of the material are used if present, otherwise the carrier's water textures. For flat surfaces (ponds, pools) |
+| `f1_effect` | `scroll` | Glowing texture that runs over the surface (LED band, ticker, light strip). The base colour texture is the light pattern |
+| `f1_effect` | `flag` | Waving cloth with a running texture (like the flags of the game). Base colour texture with alpha; subdivide the cloth (e.g. 16 × 8) so it can wave; make it double-sided |
+| `f1_speed_u`, `f1_speed_v` | number | Running speed along U and V (scroll: default 0.1 / 0; flag: 0.3; larger is faster, negative runs backwards) |
+| `f1_brightness` | number | Glow of `scroll` (default 250). The game's scrolling lights: 250 (Singapore building), 750 (Las Vegas colour cycle), 40,000 (Las Vegas neon), all on night tracks. In daylight 400 looked matt in a test; use 750 or more for a visible glow |
+| `f1_speed` | number | Factor for the speed of `water` (default 1) |
+
+Tips from the game tests:
+
+- **Flag with a motif** (logo, coat of arms, lettering): set `f1_speed_u` to `0`. With the default 0.3 the texture runs
+  sideways over the cloth like on the game's flags; stripes look fine, a motif wanders off. The waving stays.
+- **Water**: seen from the car (about 1 m above the road) a surface at ground level is almost invisible. Raise it, e.g. as
+  a basin on a plinth, and keep it in front of barriers and walls.
+
+The editor shows *Moving materials* in the details of the model. In `modelle.json` the field `effekte` sets or overrides
+the effect per material (`{"Water": "wasser", "LedBand": {"art": "lauftext", "u": 0.2, "helligkeit": 400}}`), or on the
+command line `strecke_tool.py modell aendern PROJECT NAME --effekt LedBand=lauftext:u=0.2,helligkeit=400`.
 
 ## What is converted and what is not
 
@@ -146,7 +201,9 @@ with the editor closed, or use the command line tool. Do not rename the files by
 | Metal, roughness, ambient occlusion | yes (values or texture) |
 | Collision | optional box around the footprint (tick *Collision* in the details of the model); off by default |
 | Exact collision shape, AI avoiding the model | no (the box is a simple wall; the AI does not know it, keep it off the racing line) |
-| Animation, skinning, vertex colours, second UV | no |
+| Moving parts (object animation: move, rotate, scale) | yes, one animation per model, repeats endlessly |
+| Moving materials: water, scrolling light, waving flag | yes (custom property `f1_effect`, section 7) |
+| Skinning (armatures), shape keys, vertex colours, second UV | no |
 
 ## Rights
 

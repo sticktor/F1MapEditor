@@ -13,7 +13,14 @@ Eintrag in ``modelle.json``::
 
     {"name": "schild", "datei": "schild.glb", "lod_dateien": ["schild_lod1.glb"], "kategorie": "sonstiges",
      "vorne_grad": 270.0, "sichtweite_m": 2500.0, "lod_abstaende": null, "textur_max": 1024, "textur_format": "bc7",
-     "normalen": "gl", "hash": "<sha256 der Dateien>", "statistik": {…}}
+     "normalen": "gl", "kollision": "keine", "animation": "an", "hash": "<sha256 der Dateien>", "statistik": {…}}
+
+Animation (A2, 18.11.2026, docs/animationen.md): Enthält die Datei eine glTF-Animation, erzeugt die Umsetzung immer
+Knotenbaum und Clip; ``animation: an`` lässt den Bau das Modell als ``AnimModel`` setzen (Bewegung läuft in Schleife),
+``aus`` als gewöhnliches Objekt in der Ruhelage. ``statistik.animation`` beschreibt den Clip (Name, Länge, Knoten).
+
+Bewegte Materialien (A3): ``effekte`` = {Materialname: {"art": "wasser"|"lauftext"|"fahne", "u", "v", "helligkeit",
+"tempo"}} (oder kurz {Materialname: "wasser"}); ohne Eintrag gelten die glTF-Extras ``f1_effect`` des Materials.
 
 LODs: entweder eigene Dateien (``lod_dateien``) oder in einer Datei Objekte mit Namensende ``_LOD1``, ``_LOD2`` …
 (Objekte ohne Endung sind LOD 0). Im Spiel heißt das Modell ``usr_<name>``; Kennungen tragen den Streckencode des
@@ -51,7 +58,10 @@ VORLAGE_MATERIAL = "core_lights_start_a_01.material"
 KATEGORIEN = ("baum", "busch", "palme", "gebaeude", "zelt", "moebel", "flagge", "licht", "sonstiges")
 TEXTUR_FORMATE = {"bc7": M.FORMAT_DIFFUS, "bc1": M.FORMAT_DIFFUS_BC1}
 STANDARD = {"kategorie": "sonstiges", "vorne_grad": 270.0, "sichtweite_m": 2500.0, "lod_abstaende": None,
-            "textur_max": 1024, "textur_format": "bc7", "normalen": "gl", "kollision": "keine"}
+            "textur_max": 1024, "textur_format": "bc7", "normalen": "gl", "kollision": "keine", "animation": "an",
+            "effekte": {}}
+#: Animation je Modell (A2): ``an`` = Bewegung abspielen (AnimModel), ``aus`` = Ruhelage (RenderModel)
+ANIMATION_ARTEN = ("an", "aus")
 #: Kollision je Modell (M5b, strecke/kollision.py): ``keine`` oder ``quader`` (Grundriss-Box als SCON-Flächen in TRN~)
 KOLLISION_ARTEN = ("keine", "quader")
 #: Plausible Größe eines Kulissenobjekts (größte Ausdehnung in Metern); außerhalb meist ein Einheitenfehler
@@ -117,6 +127,16 @@ def _eintrag_pruefen(e: dict) -> dict:
         raise ModellFehler("Model %s: normal map convention must be gl or dx (%r)" % (aus["name"], aus["normalen"]))
     if aus["kollision"] not in KOLLISION_ARTEN:
         raise ModellFehler("Model %s: collision must be keine or quader (%r)" % (aus["name"], aus["kollision"]))
+    if aus["animation"] not in ANIMATION_ARTEN:
+        raise ModellFehler("Model %s: animation must be an or aus (%r)" % (aus["name"], aus["animation"]))
+    if not isinstance(aus.get("effekte") or {}, dict):
+        raise ModellFehler("Model %s: effekte must map material names to effects" % aus["name"])
+    aus["effekte"] = dict(aus.get("effekte") or {})
+    for mat, eff in aus["effekte"].items():
+        try:
+            M.effekt_pruefen(eff)
+        except M.ModellImportFehler as exc:
+            raise ModellFehler("Model %s, material %s: %s" % (aus["name"], mat, exc))
     for feld in ("vorne_grad", "sichtweite_m", "textur_max"):
         w = aus[feld]
         if isinstance(w, bool) or not isinstance(w, (int, float)) or not math.isfinite(float(w)):
@@ -290,7 +310,8 @@ def lods_trennen(szene: M.Szene) -> List[M.Szene]:
     if sorted(stufen) != list(range(len(stufen))):
         raise ModellFehler("LOD objects must be numbered without gaps (_LOD1, _LOD2 …), found %s" % ", ".join(
             "LOD %d" % i for i in sorted(stufen)))
-    return [M.Szene(stufen[i], szene.materialien, szene.hinweise if i == 0 else [], szene.quelle) for i in sorted(stufen)]
+    return [M.Szene(stufen[i], szene.materialien, szene.hinweise if i == 0 else [], szene.quelle, szene.animation)
+            for i in sorted(stufen)]
 
 
 def szenen_laden(pfade: Sequence[str]) -> List[M.Szene]:
@@ -330,6 +351,18 @@ def untersuchen(pfade: Sequence[str], textur_max: int = STANDARD["textur_max"], 
                groesse_m=[round(float(x), 3) for x in groesse],
                radius_m=round(float(max(math.hypot(x, z) for x in (lo[0], hi[0]) for z in (lo[2], hi[2]))), 3),
                unterkante_m=round(float(lo[1]), 3), lod_abstaende=b["lod_abstaende"])
+    an = b.get("animation")
+    if an:      # Hüllen umfassen hier die ganze Bewegung; Grundriss und Unterkante gelten der Ruhelage
+        r_lo, r_hi = (np.array(x, float) for x in szenen[0].grenzen())
+        aus.update(aabb_min=[round(float(x), 4) for x in r_lo], aabb_max=[round(float(x), 4) for x in r_hi],
+                   groesse_m=[round(float(x), 3) for x in r_hi - r_lo],
+                   radius_m=round(float(max(math.hypot(x, z) for x in (r_lo[0], r_hi[0]) for z in (r_lo[2], r_hi[2]))), 3),
+                   unterkante_m=round(float(r_lo[1]), 3),
+                   animation={"name": an["name"], "laenge_s": an["laenge_s"], "knoten": an["knoten"],
+                              "schluessel": an["schluessel"], "bewegte_teile": an["bewegte_teile"],
+                              "huelle_min": [round(float(x), 3) for x in lo], "huelle_max": [round(float(x), 3) for x in hi]})
+        lo, hi = r_lo, r_hi
+        groesse = hi - lo
     materialien, speicher = [], 0
     benutzt = [m for m in b["materialslots"].values()]
     for name in benutzt:
@@ -346,7 +379,7 @@ def untersuchen(pfade: Sequence[str], textur_max: int = STANDARD["textur_max"], 
         materialien.append({"name": name, "basisfarbe": [round(float(x), 4) for x in q.basisfarbe], "bild": bild,
                             "normalenkarte": normal, "alpha": q.alpha, "doppelseitig": bool(q.doppelseitig),
                             "alpha_schwelle": round(float(q.alpha_schwelle), 4), "metall": round(float(q.metall), 4),
-                            "rauheit": round(float(q.rauheit), 4), "oberflaechenkarte": orm})
+                            "rauheit": round(float(q.rauheit), 4), "oberflaechenkarte": orm, "effekt": q.effekt})
         if q.alpha not in ("OPAQUE", "BLEND", "MASK"):
             hinweise.append("Material %s: unknown alpha mode %s, the material is drawn opaque" % (name, q.alpha))
     aus.update(materialien=materialien, textur_bytes=int(speicher), geometrie_bytes=int(b["bytes"]))
@@ -389,6 +422,14 @@ def aktualisieren(projekt: str) -> dict:
 
 
 # =============================================================================== Katalog
+def effekte_von(e: dict) -> Dict[str, str]:
+    """A3: wirksame Effekte eines Eintrags {Material: Art}: ``effekte`` aus ``modelle.json`` vor den glTF-Extras."""
+    aus = {m["name"]: m["effekt"]["art"] for m in (e.get("statistik") or {}).get("materialien", []) if m.get("effekt")}
+    for mat, eff in (e.get("effekte") or {}).items():
+        aus[mat] = eff if isinstance(eff, str) else eff.get("art")
+    return {k: v for k, v in sorted(aus.items()) if v}
+
+
 def katalogeintraege(projekt: str, code: str = TRAEGER_CODE, auffrischen: bool = True) -> List[dict]:
     """Katalogeinträge der eigenen Modelle im Format von ``umgebung.katalog`` (Feld ``quelle``: ``projekt``), dazu
     ``vorne_grad``/``vorne_quelle`` wie im Katalog des Mapeditors und ``datei``, ``dreiecke``, ``hinweise``.
@@ -404,7 +445,10 @@ def katalogeintraege(projekt: str, code: str = TRAEGER_CODE, auffrischen: bool =
                     "aabb_min": [round(x, 3) for x in s["aabb_min"]], "aabb_max": [round(x, 3) for x in s["aabb_max"]],
                     "quelle": "projekt", "strecken": [], "im_traeger": False, "vorne_grad": e["vorne_grad"],
                     "vorne_quelle": "projekt", "datei": e["datei"], "dreiecke": s["dreiecke"][0],
-                    "kollision": e["kollision"],
+                    "kollision": e["kollision"], "animiert": bool(s.get("animation")),
+                    "animation": bool(s.get("animation")) and e["animation"] == "an",
+                    "animation_info": dict(s["animation"]) if s.get("animation") else None,
+                    "effekte": effekte_von(e),
                     "hinweise": list(s.get("warnungen", [])) + list(s.get("hinweise", []))})
     return aus
 
@@ -442,6 +486,9 @@ def vorlage_material(archiv) -> Tuple[str, bytes]:
     if k is None:
         raise ModellFehler("The carrier has no suitable template material (object_opaque with three maps)")
     kennungen, weitere = M.vorlagen_alpha(archiv)
+    k_eff, w_eff = M.vorlagen_effekte(archiv)          # A3: Wasser, Lauftext, Fahne
+    kennungen.update(k_eff)
+    weitere.update(w_eff)
     return k, Vorlage.aus(archiv.find(k).data(), weitere, dict(kennungen, opaque=k))
 
 
@@ -482,7 +529,7 @@ def _cache_aufraeumen(ordner_: str) -> None:
 def schluessel(pfade: Sequence[str], e: dict, code: str, vorlage_roh: bytes) -> str:
     weitere = getattr(vorlage_roh, "weitere", None) or {}
     teile = [M.UMSETZUNG_VERSION, datei_hash(pfade), e["name"], code, hashlib.sha256(vorlage_roh).hexdigest(),
-             e["sichtweite_m"], e["lod_abstaende"], e["textur_max"], e["textur_format"], e["normalen"],
+             e["sichtweite_m"], e["lod_abstaende"], e["textur_max"], e["textur_format"], e["normalen"], e.get("effekte") or {},
              {art: hashlib.sha256(roh).hexdigest() for art, roh in sorted(weitere.items())}]
     return hashlib.sha256(json.dumps(teile, sort_keys=True).encode("utf-8")).hexdigest()[:32]
 
@@ -512,7 +559,7 @@ def umsetzen(projekt: str, e: dict, vorlage_roh: bytes, code: str = TRAEGER_CODE
     um = M.modell_umsetzen(szenen_laden(pfade), PRAEFIX + e["name"], wurzel(code), vorlage_roh,
                            sichtweite_m=e["sichtweite_m"], lod_abstaende=e["lod_abstaende"], textur_max=e["textur_max"],
                            textur_format=TEXTUR_FORMATE[e["textur_format"]], normalen=e["normalen"],
-                           vorlagen=getattr(vorlage_roh, "weitere", None))
+                           vorlagen=getattr(vorlage_roh, "weitere", None), effekte=e.get("effekte") or None)
     kennungen = getattr(vorlage_roh, "kennungen", None)
     if kennungen:
         um.bericht["vorlagen"] = dict(kennungen)

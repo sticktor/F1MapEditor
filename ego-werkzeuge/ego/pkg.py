@@ -479,6 +479,38 @@ def instanz_hinzufuegen(paket: Paket, vorlage_index: int, position, name: str,
     return neu
 
 
+def instanz_animieren(paket: Paket, instanz: "Instanz", clip: str) -> None:
+    """Instanz (geklont aus einer ``RenderModel``-Vorlage) zu einem ``AnimModel`` machen, das ``clip`` in Schleife
+    abspielt (docs/animationen.md): ``template`` = ``AnimModel``, Komponente ``Anim`` {``anim``: Clip} in ``overrides``
+    (Felder nach FNV-1a sortiert wie in allen Spieldateien), ``Render.is static`` = 0, falls vorhanden. Im Spiel
+    belegt mit dem Testpaket ``anim_test`` (18.11.2026, Träger Mod 1.0.2). Nur für frisch geklonte Instanzen."""
+    def sbi(text):
+        b = text.encode("utf-8")
+        if len(b) > 255 or b"\0" in b:
+            raise ValueError("Text überschreitet 255 UTF-8-Bytes oder enthält Null")
+        return bytes([len(b)]) + b + b"\0"
+
+    tf = _pfad(paket, instanz.block, "template")
+    if paket.wert(tf.wert) == "AnimModel":
+        raise PkgFormatError("Instanz ist schon ein AnimModel")
+    ov = _pfad(paket, instanz.block, "overrides").wert.ziel
+    if ov is None or ov.kennung != b"!idi" or ov.version != 1:
+        raise PkgFormatError("overrides ist kein Wörterbuch Version 1")
+    if any(paket.wert(f.name) == "Anim" for f in ov.felder):
+        raise PkgFormatError("Instanz hat schon eine Komponente Anim")
+    tf.wert = paket.neuer_wert(tf.wert, sbi("AnimModel"))
+    anim = Block(b"!idi", version=1, felder=[Feld(paket.neuer_wert(tf.wert, sbi("anim")),
+                                                    paket.neuer_wert(tf.wert, sbi(clip)), fnv1a("anim"))])
+    ov.felder.append(Feld(paket.neuer_wert(tf.wert, sbi("Anim")), Verweis(0x80, 0, anim), fnv1a("Anim")))
+    ov.felder.sort(key=lambda f: f.hash)
+    paket.bloecke.insert(paket.bloecke.index(paket.tabellen.ziel), anim)
+    for f in ov.felder:
+        if paket.wert(f.name) == "Render" and f.wert.ziel is not None:
+            for g in f.wert.ziel.felder:
+                if paket.wert(g.name) == "is static":
+                    g.wert = paket.neuer_wert(g.wert, b"\0" * paket.tabelle(g.wert).elementgroesse)
+
+
 def instanz_matrix_setzen(paket: Paket, instanz: "Instanz", matrix) -> None:
     """Vollständige 4×4-Lagematrix (16 Werte, Zeilenvektor-Layout, Translation 12–14) als neuen mat4-Wert setzen.
     Für frisch geklonte Instanzen (``instanz_hinzufuegen``): deren Strukturblöcke sind nicht geteilt."""

@@ -94,11 +94,12 @@ def extern_datei_finden(textur: grafik.Textur, suchordner: List[str]) -> Optiona
     return None
 
 
-def extern_stufen(textur: grafik.Textur, pfad: str) -> List[bytes]:
-    """Entpackte externe Mip-Stufen (größte zuerst)."""
+def extern_stufen(textur: grafik.Textur, pfad: str, ab: int = 0) -> List[bytes]:
+    """Entpackte externe Mip-Stufen (größte zuerst); ``ab`` überspringt die ersten (größten) Stufen ohne sie zu
+    entpacken (kleinere Vorschau, z. B. 3D-Ansicht des Mapeditors)."""
     stufen = []
     with open(pfad, "rb") as f:
-        for em in textur.extern_mips:
+        for em in textur.extern_mips[max(0, int(ab)):]:
             f.seek(em.offset)
             roh = f.read(em.gepackt)
             if em.codec == 3:

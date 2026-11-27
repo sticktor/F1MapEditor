@@ -84,6 +84,22 @@ def zellen_berechnen(linien: Sequence[np.ndarray], korridor_m: float = 60.0,
     return xyz.astype(np.int64)
 
 
+#: Höchstzahl der Zellen (Losail, größtes Original; Editor-Bau mit 59.557 stürzte ab) und Grenzen des automatischen Korridors
+ZELLEN_MAX = 36409
+KORRIDOR_START_M, KORRIDOR_MIN_M, KORRIDOR_SCHRITT_M = 60.0, 30.0, 5.0
+
+
+def korridor_auto(linien: Sequence[np.ndarray], zellen_max: int = ZELLEN_MAX) -> tuple:
+    """Breitester Korridor (60 m abwärts in 5-m-Schritten bis 30 m) mit höchstens ``zellen_max`` Zellen (20.11.2026).
+    Rückgabe ``(korridor_m, zellen, passt)``; passt auch 30 m nicht, kommt 30 m mit ``passt`` = False."""
+    k = KORRIDOR_START_M
+    while True:
+        n = len(zellen_berechnen(linien, k))
+        if n <= zellen_max or k - KORRIDOR_SCHRITT_M < KORRIDOR_MIN_M - 1e-9:
+            return k, n, n <= zellen_max
+        k -= KORRIDOR_SCHRITT_M
+
+
 def pvs_fuer_strecke(archiv, logik: Optional[dict] = None, code: str = "portimao", korridor_m: float = 60.0,
                      flaeche=None, gruppe_b: str = "behalten", alle_absolut: bool = False,
                      mischen: bool = True) -> Dict:

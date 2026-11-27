@@ -28,6 +28,8 @@ KOPIEREN = [("strecke", ["*.py", "beispiele/*.json", "fahrzeuge/*.json", "daten/
                           "daten/vorschau/asphalt/*.png", "daten/vorschau/skid/*.png"]), ("ego", ["*.py"]),
             (".", ["neue_strecke_tool.py", "paket_tool.py", "erp_tool.py", "strecke_tool.py", "injektor_tool.py"])]
 MAX_DATEI = 1_000_000  # Sicherung: nichts über 1 MB (keine ERPs/Pakete)
+#: zurückgehalten (Entscheidung 27.11.2026): experimentell, im Editor und CLI nicht erreichbar, bleibt nur im Arbeitsstand
+ZURUECKHALTEN = {"strecke/spieltraeger.py"}
 
 
 def version():
@@ -52,6 +54,8 @@ def werkzeugkasten_kopieren(ziel):
                 continue
             if not any(fnmatch.fnmatch(rel, m) for m in muster):
                 continue
+            if f"{ordner}/{rel}" in ZURUECKHALTEN:
+                continue
             if datei.stat().st_size > MAX_DATEI:
                 raise SystemExit(f"Zu große Datei im Werkzeugkasten: {datei}")
             ausgabe = ziel / ordner / rel if ordner != "." else ziel / rel
@@ -61,8 +65,15 @@ def werkzeugkasten_kopieren(ziel):
     return anzahl
 
 
-PRUNE = ["Qt6Pdf.dll", "Qt6Qml*.dll", "Qt6Quick*.dll", "Qt6VirtualKeyboard.dll",
-         "plugins/platforminputcontexts/*virtualkeyboard*"]
+#: Ungenutzte Qt-Teile, die PyInstaller über die QML-Hooks mitzieht. Qt Quick, QML und Qt Quick 3D bleiben seit 0.6.0
+#: (3D-Ansicht); WebEngine allein wären ~200 MB (26.11.2026).
+_UNGENUTZT = ["WebEngine", "WebChannel", "WebSockets", "WebView", "3D", "Charts", "DataVisualization", "Graphs",
+              "Location", "Positioning", "Multimedia", "SpatialAudio", "RemoteObjects", "Scxml", "StateMachine",
+              "Sensors", "TextToSpeech", "Test", "Pdf", "VirtualKeyboard", "LabsStyleKit"]
+PRUNE = ["Qt6%s*.dll" % m for m in _UNGENUTZT] + ["Qt%s*.pyd" % m for m in _UNGENUTZT] + [
+    "plugins/platforminputcontexts/*virtualkeyboard*", "plugins/qmltooling", "QtWebEngineProcess.exe", "resources"]
+#: QML-Module, die die 3D-Ansicht braucht (QtQuick, QtQuick3D mit Helpers/AssetUtils); alle anderen werden entfernt
+QML_BEHALTEN = {"Qt", "QtCore", "QtQml", "QtQuick", "QtQuick3D"}
 
 
 def beschneiden(ziel):
@@ -71,7 +82,10 @@ def beschneiden(ziel):
     vorher = groesse(ziel)
     for muster in PRUNE:
         for p in qt.glob(muster):
-            p.unlink()
+            shutil.rmtree(p) if p.is_dir() else p.unlink()
+    for p in (qt / "qml").glob("*"):
+        if p.is_dir() and p.name not in QML_BEHALTEN:
+            shutil.rmtree(p)
     for p in (qt / "translations").glob("*.qm"):
         if p.name not in ("qt_de.qm", "qt_en.qm", "qtbase_de.qm", "qtbase_en.qm"):
             p.unlink()

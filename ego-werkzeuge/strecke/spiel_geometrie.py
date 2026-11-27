@@ -51,6 +51,11 @@ def physik_kennung(archiv: erp.ErpFile) -> str:
                   and r.identifier.endswith('?context=physics_terrain')]
     return kandidaten[0] if len(kandidaten) == 1 else PHYSIK
 
+#: Ungenutztes Fahrbahnmaterial des Trägers (Shader ts_ribbon wie der Asphalt); der Kunstrasen bekommt es mit den
+#: Texturen einer Spielstrecke (Grasmaterialien teilen mit den Kunstrasen-Shadern keine Slots)
+KUNSTRASEN_MATERIAL = 'por_offtrack_a.material'
+#: Kachel des Kunstrasens: UV-Einheiten je Meter (mit me_baseMapUScale 0,5 des Materials ≈ 3 m je Kachel)
+KUNSTRASEN_UV_M = 1.5
 #: Abbildung Generatorklasse -> vorhandenes Portimão-Terrainmaterial (Dateiname) und TRN-Code.
 #: Begründung und UV-Maßstäbe: docs/neue_strecke.md, Abschnitt „Geometrie“.
 KLASSEN = {
@@ -64,11 +69,23 @@ KLASSEN = {
     'auslauf': ('por_track_pit_01.material', 'SDT+'),     # Asphalt-Auslauf: Boxenasphalt, UV wie Boxengasse
     'startbox': ('por_line_a.material', 'MKNG'),          # Bodenmarkierungen: Linienmaterial, nur sichtbar (keine Physik)
     'gebaeude': ('por_concrete_a_01.material', 'SCON'),   # Garagengebäude der Boxengasse: Beton wie die Mauern
+    # Wulstrandsteine (Sausage Kerbs, 25.11.2026): Portimãos eigenes Material, Physik BUMP wie im Original
+    'wulst': ('por_rumble_sausagekerb_a_02.material', 'BUMP'),
+    # Randsteinarten (25.11.2026, docs/kerbtypen.md): Anfangs- und Endstück (weiß, abgerundet) wie im Original,
+    # abgesenkter Randstein mit dem Mittelstück-Material und Physik RMBO (Portimão legt dort Randsteinmaterial darüber),
+    # Kunstrasen auf einem sonst ungenutzten Grasmaterial des Trägers, das die Texturen einer Spielstrecke bekommt
+    'randstein_anfang': ('por_rumble_triangle_b_01.material', 'RMBL'),
+    'randstein_ende': ('por_rumble_triangle_b_03.material', 'RMBL'),
+    'randstein_tief': ('por_rumble_triangle_b_02.material', 'RMBO'),
+    'kunstrasen': (KUNSTRASEN_MATERIAL, 'ASTR'),
 }
 #: Klassen, die nur gezeichnet werden (knapp über dem Asphalt liegende Markierungen)
 NUR_SICHTBAR = ('startbox',)
 #: Klassen, die ältere Generatorausgaben noch nicht kennen
-OPTIONAL = ('auslauf', 'startbox', 'gebaeude')
+OPTIONAL = ('auslauf', 'startbox', 'gebaeude', 'wulst', 'randstein_anfang', 'randstein_ende', 'randstein_tief',
+            'kunstrasen')
+#: Klassen mit Randstein-UV (v = s / Randstein-Texturlänge im Generator)
+RANDSTEIN_KLASSEN = ('randstein', 'randstein_anfang', 'randstein_ende', 'randstein_tief')
 #: Senkrechte/überhängende Bauteile ohne Bodenrolle (Mauern, Gebäude): keine verschweißten Bodennormalen, nicht im
 #: Gelände-Rand
 BAUTEILE = ('mauer', 'gebaeude')
@@ -78,11 +95,14 @@ GRUND = ('por_grass_infield_a_01.material', 'GRS+')
 PERIODE_FLAECHE = 32.0      # Asphalt, Boxengasse, Gras, Kies (u und v ≈ 32 m)
 PERIODE_RANDSTEIN = 3.4     # Rot/Weiß-Muster längs (u)
 RANDSTEIN_V = (0.535, 1.0)  # belegter V-Bereich des Randstein-Atlas (quer)
+PERIODE_WULST = 7.35        # Wulstrandstein: u längs 0,136 je Meter (Portimão-Original, 15 Stücke vermessen)
+WULST_V = (0.262, 0.409)    # belegter V-Bereich quer über das Profil (Original)
 PERIODE_LINIE = 1.84        # Linie längs (v); u 0…1 über die Linienbreite
 PERIODE_MAUER = 4.0
 
 #: Ersatzwerte, falls das Träger-Original nicht mehr lesbar ist (gemessen am Original).
-TRN_ATTRIBUT_ERSATZ = {'SDT+': 0xff808080, 'RMBL': 0xff989898, 'MKNG': 0xff808080,
+TRN_ATTRIBUT_ERSATZ = {'SDT+': 0xff808080, 'RMBL': 0xff989898, 'MKNG': 0xff808080, 'BUMP': 0xff989898,
+                       'RMBO': 0xff989898, 'ASTR': 0xff637289,
                        'GRS+': 0xff637289, 'HDG+': 0xff6a9ab5, 'SCON': 0xffffffff}
 LOCH_ERSATZ = (-920.129638671875, -1008.2256469726562, 2048.0)
 
@@ -323,7 +343,7 @@ def _strecken_uv(netz: dict, pos: np.ndarray) -> Dict[str, object]:
     tl, tk = netz['tl'], netz['tk']
     s = uvg[:, 1] * tl
     rs = np.zeros(len(pos), dtype=bool)
-    rs[np.unique(tri[o == k['randstein']])] = True
+    rs[np.unique(tri[np.isin(o, [k[n] for n in RANDSTEIN_KLASSEN if n in k])])] = True
     s[rs] = uvg[rs, 1] * tk
     quer = uvg[:, 0] * tl  # Abstand vom Fahrbahnrand (außer Fahrbahnbänder)
     # Fahrbahnbänder (Asphalt + Linien): je Station Breite W aus den Randvertices u=0/u=1
@@ -373,6 +393,33 @@ def _welt_uv(vorlagen: dict, material: str, p: np.ndarray) -> np.ndarray:
     return np.c_[(p[:, 0] - x0) / kante, (p[:, 2] - z0) / kante]
 
 
+def _stueck_u(sel_tri: np.ndarray, s: np.ndarray, n: int) -> np.ndarray:
+    """u je Vertex 0…1 über jedes zusammenhängende Stück (Anfangs-/Endstück des Randsteins) entlang s."""
+    eltern = np.arange(n)
+
+    def wurzel(x):
+        while eltern[x] != x:
+            eltern[x] = eltern[eltern[x]]
+            x = eltern[x]
+        return x
+    for a, b, c in sel_tri:
+        ra = wurzel(a)
+        for x in (b, c):
+            rx = wurzel(x)
+            if rx != ra:
+                eltern[rx] = ra
+    ids = np.unique(sel_tri)
+    wurzeln = np.array([wurzel(i) for i in ids])
+    u = np.zeros(n)
+    for w in np.unique(wurzeln):
+        teil = ids[wurzeln == w]
+        st = s[teil]
+        if st.max() - st.min() > 50.0:          # Stück über die Ziellinie: s fortsetzen
+            st = np.where(st < st.max() - 50.0, st + s.max(), st)
+        u[teil] = (st - st.min()) / max(st.max() - st.min(), 1e-6)
+    return u
+
+
 def render_netze(netz: dict, pos: np.ndarray, t: g.Terrain, vorlagen: dict) -> Tuple[List[gt.TerrainNetz], dict]:
     """TerrainNetz je Generatorklasse (Spielkoordinaten), Material und Attribute nach Vorlage."""
     tri, o, uvg = netz['dreiecke'], netz['oberflaeche'], netz['uv']
@@ -398,6 +445,7 @@ def render_netze(netz: dict, pos: np.ndarray, t: g.Terrain, vorlagen: dict) -> T
             _mat_index(t, material), pos[ids], lokal, uv0[ids], normalen=normalen[ids],
             farben=np.tile(vorlagen['farben'][material], (n, 1)).astype(np.float64),
             uv_welt=welt, uv_zusatz=zusatz, normale_w=np.zeros(n)))
+        info.setdefault('_klassen', []).append(klasse)      # Klasse je Netz (3D-Ansicht des Mapeditors)
         eintrag = info.setdefault(klasse, dict(material=material, dreiecke=0, vertices=0))
         eintrag['dreiecke'] += int(len(lokal))
         eintrag['vertices'] += int(n)
@@ -425,6 +473,32 @@ def render_netze(netz: dict, pos: np.ndarray, t: g.Terrain, vorlagen: dict) -> T
     anfuegen('randstein', tri[o == k['randstein']], uv0_rs,
              lambda ids, welt: np.c_[quer[ids] / PERIODE_FLAECHE, -s[ids] / p_flaeche,
                                      np.full(len(ids), 0.25), uv0_rs[ids, 0]], nrm_boden)
+    # Anfangs- und Endstücke: eine Texturlänge je Stück, u örtlich 0…1 (Rundung am Anfang bzw. Ende des Randsteins)
+    for klasse in ('randstein_anfang', 'randstein_ende'):
+        if klasse in k and np.any(o == k[klasse]):
+            sel = tri[o == k[klasse]]
+            u_lokal = _stueck_u(sel, s, len(pos))
+            uv0_k = np.c_[u_lokal, uv0_rs[:, 1]]
+            anfuegen(klasse, sel, uv0_k,
+                     lambda ids, welt, uv0_k=uv0_k: np.c_[quer[ids] / PERIODE_FLAECHE, -s[ids] / p_flaeche,
+                                                          np.full(len(ids), 0.25), uv0_k[ids, 0]], nrm_boden)
+    # Abgesenkter Randstein: Mittelstück-Muster längs, quer über die eigene Breite (Generator-u = Anteil 0…1)
+    if 'randstein_tief' in k and np.any(o == k['randstein_tief']):
+        uv0_t = np.c_[s / p_rand, RANDSTEIN_V[0] + (RANDSTEIN_V[1] - RANDSTEIN_V[0]) * np.clip(uvg[:, 0], 0, 1)]
+        anfuegen('randstein_tief', tri[o == k['randstein_tief']], uv0_t,
+                 lambda ids, welt: np.c_[np.zeros(len(ids)), -s[ids] / p_flaeche, np.full(len(ids), 0.25),
+                                         uv0_t[ids, 0]], nrm_boden)
+    # Kunstrasen (Fahrbahn-Shader): u quer, v längs, ≈ 3-m-Kachel; Zusatz wie Asphalt (UV0, Rundenanteil, Mitte)
+    if 'kunstrasen' in k and np.any(o == k['kunstrasen']):
+        uv0_k = np.c_[quer / KUNSTRASEN_UV_M, -s / KUNSTRASEN_UV_M]
+        anfuegen('kunstrasen', tri[o == k['kunstrasen']], uv0_k,
+                 lambda ids, welt: np.c_[uv0_k[ids], s[ids] / L, np.full(len(ids), 0.5)], nrm_boden)
+    # Wulstrandsteine: u längs (7,35 m), v quer über das Profil im Atlasbereich des Originals; Zusatz wie Randstein
+    if 'wulst' in k and np.any(o == k['wulst']):
+        uv0_w = np.c_[s / PERIODE_WULST, WULST_V[0] + (WULST_V[1] - WULST_V[0]) * np.clip(uvg[:, 0], 0, 1)]
+        anfuegen('wulst', tri[o == k['wulst']], uv0_w,
+                 lambda ids, welt: np.c_[np.zeros(len(ids)), -s[ids] / p_flaeche, np.full(len(ids), 0.5),
+                                         uv0_w[ids, 0]], nrm_boden)   # verschweißt: rund statt Facetten
     # Linien: Startlinie (zwischen Station 0 und 1) und Randlinien getrennt (eigene Vertices)
     lt = tri[o == k['linie']]
     if len(lt):
@@ -455,6 +529,30 @@ def render_netze(netz: dict, pos: np.ndarray, t: g.Terrain, vorlagen: dict) -> T
                        periode_linie_m=p_linie, stationen_ohne_fahrbahnrand=su['stationen_ohne_rand'],
                        fahrbahnbreite_m=[float(np.nanmin(W)), float(np.nanmax(W))])
     return netze, info
+
+
+def vorschau_netze(vertices, normalen, uv, dreiecke, oberflaeche, namen, param: Optional[dict] = None) -> List[dict]:
+    """Rendernetze wie im Bau ohne Träger (3D-Ansicht des Mapeditors, Mapeditor/docs/3d_spielassets.md): je Netz
+    ``klasse``, ``material`` (Dateiname), Positionen in den Koordinaten der Eingabe, Dreiecke, UV0 wie im Spiel,
+    Normalen. Dieselbe Rechnung wie ``render_netze`` (Texturperioden, Atlasbereiche, Anfangs-/Endstücke)."""
+    param = param or {}
+    geo = param.get('geometrie') or {}
+    netz = dict(vertices=np.asarray(vertices, np.float64), normalen=np.asarray(normalen, np.float64),
+                uv=np.asarray(uv, np.float64), uv32=np.asarray(uv, np.float32),
+                dreiecke=np.asarray(dreiecke, np.int64), oberflaeche=np.asarray(oberflaeche, np.int64),
+                namen=list(namen), tl=float(geo.get('textur_laenge_m', 10.0)), tk=float(geo.get('randstein_textur_m', 4.0)),
+                linienbreite=float((param.get('fahrbahn') or {}).get('randlinie_breite', 0.25) or 0.25),
+                randsteinbreite=float((param.get('randstein') or {}).get('breite', 1.5) or 1.5))
+    materialien = sorted({m for m, _ in KLASSEN.values()})
+
+    class _Terrain:                    # nur die Materialliste (Index je Material)
+        pass
+    t = _Terrain()
+    t.materialien = ['vorschau/' + m for m in materialien]
+    vorlagen = dict(farben={m: [128, 128, 128, 255] for m in materialien}, uv_welt={m: [0.5, 0.5] for m in materialien})
+    netze, info = render_netze(netz, netz['vertices'], t, vorlagen)
+    return [dict(klasse=k, material=materialien[n.material], pos=n.positionen, dreiecke=n.dreiecke, uv=n.uvs,
+                 normalen=n.normalen) for k, n in zip(info.get('_klassen', []), netze)]
 
 
 # ----------------------------------------------------------------------------- Grundfläche
@@ -652,7 +750,8 @@ def _neigung_grad(pos, tri):
 
 # ----------------------------------------------------------------------------- Physik-Varianten (AP15)
 #: Klassen der befahrbaren Fahrbahn (Physikumfang 'fahrbahn')
-FAHRBAHN_KLASSEN = ('asphalt', 'boxengasse', 'linie', 'randstein', 'auslauf')
+FAHRBAHN_KLASSEN = ('asphalt', 'boxengasse', 'linie', 'randstein', 'auslauf', 'wulst', 'randstein_anfang',
+                    'randstein_ende', 'randstein_tief')
 
 
 def physik_unterteilen(v, t, attr, kante_max, auswahl=None, max_runden=16):
@@ -733,6 +832,57 @@ def _abstand_xz(punkte: np.ndarray, ziele: np.ndarray, block: int = 256) -> np.n
 def _glatt(x: np.ndarray) -> np.ndarray:
     x = np.clip(x, 0.0, 1.0)
     return x * x * (3.0 - 2.0 * x)
+
+
+def _abstand_viereck(px: np.ndarray, pz: np.ndarray, ecken: np.ndarray) -> np.ndarray:
+    """Abstand (m) der Punkte zu einem konvexen Vieleck in x/z; 0 innen."""
+    ecken = np.asarray(ecken, float)
+    n = len(ecken)
+    flaeche = sum(ecken[i, 0] * ecken[(i + 1) % n, 1] - ecken[(i + 1) % n, 0] * ecken[i, 1] for i in range(n))
+    vz = 1.0 if flaeche > 0 else -1.0
+    innen = np.ones(len(px), bool)
+    d = np.full(len(px), np.inf)
+    for i in range(n):
+        a, b = ecken[i], ecken[(i + 1) % n]
+        ex, ez = b - a
+        laenge2 = max(ex * ex + ez * ez, 1e-9)
+        innen &= vz * (ex * (pz - a[1]) - ez * (px - a[0])) >= 0
+        t = np.clip(((px - a[0]) * ex + (pz - a[1]) * ez) / laenge2, 0.0, 1.0)
+        d = np.minimum(d, np.hypot(px - (a[0] + t * ex), pz - (a[1] + t * ez)))
+    return np.where(innen, 0.0, d)
+
+
+def fundamente_anwenden(gp: np.ndarray, strecke: np.ndarray, flaechen, *, abstand_strecke: float = 10.0,
+                        uebergang_strecke: float = 8.0) -> dict:
+    """Fundamente (20.11.2026): Gelände unter Grundrissen (``umgebung.fundament_flaechen``) auf die höchste Stelle
+    einebnen, außen über ``rand_m`` weich in den Hang. Nahe der Strecke (``abstand_strecke`` + Übergang) bleibt das
+    Gelände, wie es ist. ``gp`` wird verändert. Rückgabe: Bericht je Fundament."""
+    ziele = np.unique(np.round(strecke[:, (0, 2)] / 4.0), axis=0) * 4.0
+    ziele = np.c_[ziele[:, 0], np.zeros(len(ziele)), ziele[:, 1]]
+    maske = _glatt((_abstand_xz(gp, ziele) - abstand_strecke) / uebergang_strecke)
+    liste = []
+    for f in flaechen:
+        ecken = np.asarray(f["ecken"], float)
+        rand = float(f.get("rand_m", 10.0))
+        x0, z0 = ecken.min(0) - rand
+        x1, z1 = ecken.max(0) + rand
+        nah = np.flatnonzero((gp[:, 0] >= x0) & (gp[:, 0] <= x1) & (gp[:, 2] >= z0) & (gp[:, 2] <= z1))
+        if not len(nah):
+            liste.append({"id": f.get("id"), "vertices": 0})
+            continue
+        d = _abstand_viereck(gp[nah, 0], gp[nah, 2], ecken)
+        # Höchste Stelle unter dem Grundriss; das 8-m-Raster trifft schmale Grundrisse evtl. nicht → 4 m Zugabe
+        unter = d <= 4.0
+        if not unter.any():
+            unter = d <= d.min() + 1e-6
+        ziel = float(gp[nah[unter], 1].max())
+        w = np.where(d <= 0.0, 1.0, np.where(d < rand, 0.5 * (1.0 + np.cos(np.pi * np.clip(d / rand, 0, 1))), 0.0))
+        w *= maske[nah]
+        alt = gp[nah, 1].copy()
+        gp[nah, 1] = alt + (ziel - alt) * w
+        liste.append({"id": f.get("id"), "hoehe": round(ziel, 2), "vertices": int((w > 0).sum()),
+                      "hub_max_m": round(float(np.max(np.abs(gp[nah, 1] - alt))), 2)})
+    return {"fundamente": liste}
 
 
 def huegel_anwenden(gp: np.ndarray, strecke: np.ndarray, loch: dict, hoehen, *, abstand_strecke: float = 30.0,
@@ -867,6 +1017,10 @@ def geometrie_einsetzen(archiv: erp.ErpFile, netz_npz: str, **optionen) -> dict:
     materialien = sorted({m for m, _ in KLASSEN.values()} | {GRUND[0]})
     codes = sorted({c for _, c in KLASSEN.values()} | {GRUND[1]})
     vorlagen = optionen.get('vorlagen') or vorlagen_lesen(archiv, materialien, codes)
+    if KUNSTRASEN_MATERIAL in vorlagen['farben'] and any(KUNSTRASEN_MATERIAL in e for e in vorlagen['ersatz']):
+        asphalt = KLASSEN['asphalt'][0]              # gleicher Shader: Vertexfarbe und Welt-UV vom Asphalt
+        vorlagen['farben'][KUNSTRASEN_MATERIAL] = vorlagen['farben'][asphalt]
+        vorlagen['uv_welt'][KUNSTRASEN_MATERIAL] = vorlagen['uv_welt'][asphalt]
     loch = loch_lesen(archiv)
     bericht = dict(platzierung=dict(versatz=list(platzierung.VERSATZ)),
                    vorlagen={k: v for k, v in vorlagen.items()},
@@ -875,6 +1029,15 @@ def geometrie_einsetzen(archiv: erp.ErpFile, netz_npz: str, **optionen) -> dict:
     asphalt = optionen.get('asphalt_vorlage')
     skid = optionen.get('skid_vorlage')
     bericht['mipmaps'] = []
+    if 'kunstrasen' in netz['namen'] and np.any(netz['oberflaeche'] == netz['namen'].index('kunstrasen')):
+        from strecke import asphalt_vorlagen
+        try:
+            bericht['kunstrasen'] = asphalt_vorlagen.kunstrasen_einsetzen(
+                archiv, optionen.get('kunstrasen_vorlage') or 'melbourne', spielordner=optionen.get('spielordner'),
+                code=optionen.get('code') or 'portimao', ziel_material=KUNSTRASEN_MATERIAL)
+            bericht['mipmaps'] += list(bericht['kunstrasen'].get('mipmaps') or [])
+        except asphalt_vorlagen.VorlagenFehler as e:
+            raise GeometrieFehler(str(e))
     if (asphalt and asphalt != 'traeger') or (skid and skid != 'traeger'):
         from strecke import asphalt_vorlagen
         code = optionen.get('code') or 'portimao'
@@ -882,7 +1045,8 @@ def geometrie_einsetzen(archiv: erp.ErpFile, netz_npz: str, **optionen) -> dict:
         try:
             if asphalt and asphalt != 'traeger':
                 bericht['asphalt_vorlage'] = asphalt_vorlagen.einsetzen(
-                    archiv, asphalt, spielordner=spiel, code=code)
+                    archiv, asphalt, spielordner=spiel, code=code,
+                    farbton=optionen.get('asphalt_farbton') or 'neutral')
                 bericht['mipmaps'] += list(bericht['asphalt_vorlage'].get('mipmaps') or [])
             if skid and skid != 'traeger':
                 bericht['skid_vorlage'] = asphalt_vorlagen.skid_einsetzen(
@@ -929,6 +1093,9 @@ def geometrie_einsetzen(archiv: erp.ErpFile, netz_npz: str, **optionen) -> dict:
         nutz = np.unique(tri[~markierung])
         info_huegel = huegel_anwenden(grund['positionen'], pos[nutz], loch, list(optionen['huegel']))
         bericht['huegel'] = info_huegel
+    if grund is not None and optionen.get('fundamente'):
+        nutz = np.unique(tri[~markierung])
+        bericht['fundamente'] = fundamente_anwenden(grund['positionen'], pos[nutz], list(optionen['fundamente']))
     if grund is not None:
         gp = grund['positionen']
         ids, lokal = _teilnetz(grund['render'])

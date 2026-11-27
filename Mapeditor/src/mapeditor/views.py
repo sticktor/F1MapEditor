@@ -8,7 +8,7 @@ from PySide6.QtWidgets import QWidget
 
 from . import hoehenfarbe
 from .i18n import dezimal, tr, trn
-from .mapview import MATERIALS, MATERIAL_NAMES, MapView, cosmetic, path_for  # noqa: F401  (MapView: Rückwärtskompatibilität)
+from .mapview import MATERIALS, MATERIAL_NAMES, SAUSAGE_COLOR, MapView, cosmetic, path_for  # noqa: F401  (MapView: Rückwärtskompatibilität)
 from .ux import zahl
 
 
@@ -527,12 +527,34 @@ class CrossSection(QWidget):
             for band in range(5):
                 if distances[band + 1] - distances[band] > 0.02:
                     material = side["bands"][i][band]
+                    parts = side.get("kerb_parts")
+                    if band == 2 and parts and parts[i][1] > 0.02:      # Randstein + abgesenkter Randstein
+                        cut = distances[band] + parts[i][0]
+                        strip(sign * (width + distances[band]), sign * (width + cut), material)
+                        strip(sign * (width + cut), sign * (width + distances[band + 1]), 13)
+                        names.update({tr(MATERIAL_NAMES.get(material, "Kerb")), tr(MATERIAL_NAMES[13])})
+                        continue
                     strip(sign * (width + distances[band]), sign * (width + distances[band + 1]), material)
-                    names.add(tr(MATERIAL_NAMES[material]))
+                    names.add(tr(MATERIAL_NAMES.get(material, "Kerb")))
             barrier_position = xy(sign * (width + distances[-1]))
             painter.setPen(QPen(QColor(MATERIALS[4]), 3))
             painter.drawLine(barrier_position, barrier_position - QPointF(0, min(45, v.get("barrier", {}).get("hoehe", 1.2) * scale * exaggeration)))
         names.add(tr("Barrier"))
+        length = v.get("length") or 0.0
+        for sausage in v.get("sausages") or []:                # Wulstrandsteine an der Cursorstelle
+            if not length or (self.station - sausage["s0"]) % length > sausage["s1"] - sausage["s0"]:
+                continue
+            sign, width = (1, wl) if sausage["side"] == "links" else (-1, wr)
+            umriss = []
+            for k in range(13):
+                t = k / 12
+                d = sign * (width + sausage["inner"] + t * sausage["width"])
+                hump = sausage["height"] * math.sin(math.pi * t) ** 0.7
+                umriss.append(xy(d) - QPointF(0, max(hump * scale * exaggeration, 2.0 * math.sin(math.pi * t))))
+            painter.setPen(QPen(QColor("#3B2F05"), 1))
+            painter.setBrush(QColor(SAUSAGE_COLOR))
+            painter.drawPolygon(QPolygonF(umriss))
+            names.add(tr("Sausage kerb"))
         painter.setPen(self.palette().text().color())
         painter.drawText(18, 49, tr("Left {wl}  /  right {wr}  ·  {vorzeichen}{bank}°  ·  station {station}", wl=zahl(wl, 2, 'm'), wr=zahl(wr, 2, 'm'),
                                     vorzeichen='+' if v['bank'][i] >= 0 else '', bank=zahl(v['bank'][i], 2), station=zahl(self.station, 1, 'm')))

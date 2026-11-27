@@ -64,6 +64,14 @@ OBERFLAECHEN_FARBEN = {"asphalt": (70, 70, 74), "randstein": (200, 40, 40), "gra
                        "linie": (240, 240, 240)}
 
 
+def _kunstrasen_vorlage(definition_pfad):
+    """Spielstrecke für die Kunstrasen-Texturen (``kunstrasen.vorlage`` der Definition, Standard Melbourne)."""
+    from strecke import definition as _d
+    try:
+        return (_d.laden(definition_pfad).param.get("kunstrasen") or {}).get("vorlage") or "melbourne"
+    except (OSError, ValueError, KeyError):
+        return "melbourne"
+
 def _pfad_pruefen(pfad):
     if spielpfade.geschuetzt(pfad):
         raise BauFehler("Ausgabe in geschütztem Ordner (%s)" % pfad)
@@ -600,12 +608,17 @@ def cmd_bauen(args):
         else:
             _log("Geometrie einsetzen (AP11a) …")
             huegel = list(getattr(args, "gelaende_huegel", None) or [])
+            fundamente = []
             kollision, kollision_hinweise = None, []
             if args.umgebung:       # 29.10.2026: Hügel/Senken aus umgebung.json (gelaende.huegel)
                 from strecke import umgebung as umg
                 try:
                     umg_vorab = umg.laden(args.umgebung)
                     huegel += umg.huegel_welt(umg_vorab, platzierung.VERSATZ)
+                    # 20.11.2026: Gelände unter Objekten mit boden = fundament einebnen
+                    fundamente = umg.fundament_flaechen(
+                        umg_vorab, versatz=platzierung.VERSATZ,
+                        projekt=getattr(args, "modelle_projekt", None) or os.path.dirname(args.umgebung))
                 except umg.UmgebungFehler as e:
                     raise BauFehler("Umgebung: %s" % e)
                 # M5b: Kollisionsquader eigener Modelle in die Fahrphysik (docs/eigene_modelle_m5b.md)
@@ -619,9 +632,12 @@ def cmd_bauen(args):
                                           hoehe_versatz=args.geometrie_dy, physik_umfang=args.physik_umfang,
                                           physik_kante_max=args.physik_kante_max,
                                           grundflaeche=getattr(args, "grundflaeche", "raster"),
-                                          huegel=huegel or None, welt_uv=getattr(args, "welt_uv", "konstant"),
+                                          huegel=huegel or None, fundamente=fundamente or None,
+                                          welt_uv=getattr(args, "welt_uv", "konstant"),
                                           asphalt_vorlage=getattr(args, "asphalt_vorlage", None),
                                           skid_vorlage=getattr(args, "skid_vorlage", None),
+                                          asphalt_farbton=getattr(args, "asphalt_farbton", None) or "neutral",
+                                          kunstrasen_vorlage=_kunstrasen_vorlage(args.definition),
                                           code=zustand.code, **extra)
             bericht["schritte"]["geometrie"] = _kurz(
                 {k: v for k, v in geo.items() if k != "mipmaps"} if isinstance(geo, dict) else geo)
@@ -809,7 +825,12 @@ def cmd_bauen(args):
             # 16.10.2026: Original-PVS lässt die neue Fahrbahn neben der Box (alter Portimão-Bereich) unsichtbar
             _log("PVS-Zellen entlang der neuen Strecke …")
             from strecke import spiel_pvs
-            erg = spiel_pvs.pvs_fuer_strecke(a, logik=lg, korridor_m=args.pvs_korridor)
+            korridor = args.pvs_korridor
+            if korridor == "auto":      # 20.11.2026: so breit wie möglich, höchstens so viele Zellen wie Losail
+                korridor, n_zellen, passt = spiel_pvs.korridor_auto(spiel_pvs.linien_aus_logik(lg))
+                _log("PVS-Korridor automatisch: %.0f m (%d Zellen%s)" % (korridor, n_zellen,
+                                                                         "" if passt else ", mehr als die Originale"))
+            erg = spiel_pvs.pvs_fuer_strecke(a, logik=lg, korridor_m=float(korridor))
             erg.pop("linien", None)
             erg.update(zellen=erg["zellen_a"], vorher_byte=erg["vis_bytes_alt"], nachher_byte=erg["vis_bytes_neu"])
             bericht["schritte"]["pvs"] = erg
@@ -1480,6 +1501,16 @@ def _signal(signum, _frame):
 
 
 # =============================================================================== CLI
+def _korridor(text):
+    """``--pvs-korridor``: ``auto`` oder Meter (> 0)."""
+    if str(text).strip().lower() == "auto":
+        return "auto"
+    wert = float(text)
+    if wert <= 0:
+        raise argparse.ArgumentTypeError("PVS corridor must be > 0 or auto")
+    return wert
+
+
 def argumente(argv):
     """Kommandozeile parsen, Profil anwenden, Optionen auflösen (_vorbereiten); wirft BauFehler."""
     argv = list(argv)
@@ -1537,6 +1568,9 @@ def argumente(argv):
     s.add_argument("--asphalt-vorlage", dest="asphalt_vorlage", default=None, metavar="NAME",
                    help="Fahrbahnoberfläche aus strecke/daten/fahrbahn.json (Streckenname, z. B. monza); "
                         "traeger = unverändert; Texturen werden aus dem Spielordner kopiert")
+    s.add_argument("--asphalt-farbton", dest="asphalt_farbton", choices=("neutral", "vorlage"), default="neutral",
+                   help="Farbton der Fahrbahnvorlage: neutral = nur Helligkeit von Grund- und Staubton (Standard, "
+                        "sonst färbt etwa Silverstone die Ränder olivgrün), vorlage = Farbe der Vorlage behalten")
     s.add_argument("--skid-vorlage", dest="skid_vorlage", default=None, metavar="NAME",
                    help="Reifenspuren aus strecke/daten/fahrbahn.json (type1…4 oder traeger); "
                         "traeger = unverändert; Texturen werden aus dem Spielordner kopiert")
@@ -1569,7 +1603,9 @@ def argumente(argv):
                         "curvature_gate ab. Nur mit --ki-daten skalieren/profil (Diagnose Issue 5)")
     s.add_argument("--ki-ohne-pakete", default="",
                    help="Fahrzeugpakete (Komma), deren KI-Daten unverändert bleiben, z. B. f1_2024_story_vehicle_package")
-    s.add_argument("--pvs-korridor", type=float, default=60.0, help="Korridorbreite je Seite für --pvs-variante strecke")
+    s.add_argument("--pvs-korridor", type=_korridor, default="auto",
+                   help="Korridorbreite je Seite für --pvs-variante strecke in m oder auto (Standard: 60 m, bei zu vielen "
+                        "Zellen schrittweise bis 30 m schmaler)")
     s.add_argument("--nur-original-pvs", action="store_true",
                    help="nur die Variante mit Original-PVS schreiben und verpacken (spart ~3 GB)")
     s.add_argument("--nur-hauptvariante", action="store_true",

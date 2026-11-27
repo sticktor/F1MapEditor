@@ -141,6 +141,15 @@ LGPL-konforme Weitergabe bei `onedir`:
    Virenscanner-Fehlalarme bei PyInstaller-EXEs sind möglich.
 7. Beispielprojekte im Installationsordner erzwingen seit AP25 „Speichern unter“ in einen Benutzerordner (getestet).
 8. Bei Python-/PySide-Update `hiddenimports` und `PRUNE` in `bauen.py` prüfen (der Rauchtest fängt Fehler auf).
+9. **3D-Ansicht im Paket (26.11.2026):** Die Spec der 0.5.x schloss `QtQml`/`QtQuick`/`QtQuickWidgets`/`QtOpenGL` aus
+   und `bauen.py` löschte `Qt6Qml*.dll`/`Qt6Quick*.dll`: im gepackten Programm brach die 3D-Ansicht mit „DLL load failed
+   while importing QtQuick3D“ ab, und wer zuletzt im Arbeitsbereich 3D war, konnte den Editor gar nicht mehr starten.
+   Jetzt: Qt Quick, QML, Qt Quick 3D und `PySide6.QtOpenGL` (braucht `PySide6.QtQuick`) sind dabei, `assimp.dll`
+   (Asset-Importer für eigene `.glb`) per `binaries`; `bauen.py` entfernt dafür WebEngine (≈ 200 MB), Qt 3D, Charts,
+   Multimedia, Location usw. samt QML-Ordnern (`_UNGENUTZT`, `QML_BEHALTEN`). Distribution 150 → **237 MB**.
+   Ohne Qt Quick 3D meldet der Editor das und fällt auf den Arbeitsbereich „Track“ zurück. Rauchtest Schritt 9
+   (`MAPEDITOR_RAUCHTEST=3d`, mit echter Grafik, kurzes Fenster): Fahrlinie abwarten, Arbeitsbereich 3D, keine QML-Fehler,
+   Szene geladen, Bild nicht leer; mit `MAPEDITOR_RAUCHTEST_PROJEKT` auch eigene Modelle (Feature GP: 31/31 geladen).
 
 ## Öffentlicher Stand für GitHub
 

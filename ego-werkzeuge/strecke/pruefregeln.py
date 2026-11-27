@@ -186,6 +186,10 @@ _R = [
     Regel("BOX_BEGRENZT", "BO-06", HINWEIS, "eingabe",
           "Pit lane shortened to stay on the straight",
           "docs/issue5_bristol.md", "Gasse endet 20 m vor Querneigung > 4°, höchstens 45 % der Runde"),
+    Regel("BOX_ANZAHL_ANGEHOBEN", "BO-07", WARNUNG, "eingabe",
+          "Fewer pit boxes than the carrier's teams – the build places 11 boxes",
+          "ego-werkzeuge/ergebnisse/ph01_pitgarage23.md",
+          "PH-01 (17.11.2026): Box 12 (MyTeam) lag bei 10 Boxen hinter dem Garagengebäude im Gras"),
     Regel("EINGABE_PUNKTLUECKE", "IN-03", WARNUNG, "eingabe",
           "Large gap between two control points (the spline bridges it freely, e.g. after box deletion)",
           QUELLEN["definition"], "Editor-Bau 16.10.2026: 392 m / 693 m Lücken zwischen sonst 5 m Abstand"),
@@ -196,6 +200,9 @@ _R = [
           "More main corners than carrier braking-line IDs (15) – the build merges the closest corners",
           QUELLEN["schritt2"], "Alle 28 Originale: Bremslinien ≥ Kurven; Editor-Strecke mit 16 Kurven stürzte ab, "
           "testedit5_kurven15 (zusammengelegt) läuft (25.10.2026)"),
+    Regel("WULST_AUF_IDEALLINIE", "WU-01", WARNUNG, "generator",
+          "Sausage kerb within reach of the racing line: cars that use the edge of the track hit it",
+          "docs/wurstrandsteine.md", "Portimão setzt Wülste nur hinter Randsteine, abseits der Ideallinie (25.11.2026)"),
     Regel("KI_OHNE_BREMSZONE", "KI-08", FEHLER, "generator",
           "No braking zone on the lap: the AI drives flat out all the way round", "docs/issue5_bristol.md",
           "Issue #5 (15.11.2026): alle Bristol-Varianten mit 0–4 km/h Tempospanne hängen 15 s nach dem Rennstart "
@@ -350,6 +357,10 @@ _R = [
           QUELLEN["modelle"], "Texturen und Geometrie eigener Modelle liegen vollständig im ERP und ständig im Speicher"),
     Regel("MOD_UNBENUTZT", "MO-07", HINWEIS, "eingabe", "Own model is not placed anywhere",
           QUELLEN["modelle"], "Nur platzierte Modelle kommen ins Paket"),
+    Regel("MOD_ANIM_KOLLISION", "MO-08", WARNUNG, "eingabe",
+          "Own model moves, but its collision box stays at the rest pose", "docs/animationen.md",
+          "A2: SCON-Quader in TRN~ sind fest; bewegte Teile (AnimModel) haben keine Kollision, der Quader liegt um "
+          "die Ruhelage"),
     # ---------------------------------------------------------------- Fahrbahn / Reifenspuren (PR #7)
     Regel("FAHRBAHN_UNBEKANNT", "FB-01", FEHLER, "profil",
           "Unknown track surface or tyre-mark template", QUELLEN["fahrbahn"],
@@ -1208,7 +1219,8 @@ def modelle_pruefen(projekt, m, umgebung=None) -> set:
     ``strecke/eigene_modelle.py``). Ohne Tabelle geprüft und ohne Meldung. ``umgebung``: Pfad oder dict der
     ``umgebung.json`` für MOD_UNBENUTZT (ohne Angabe ``<projekt>/umgebung.json``, falls vorhanden)."""
     from . import eigene_modelle as em
-    gp = {"MOD_DATEI", "MOD_DREIECKE", "MOD_GROESSE", "MOD_URSPRUNG", "MOD_HINWEIS", "MOD_SPEICHER", "MOD_UNBENUTZT"}
+    gp = {"MOD_DATEI", "MOD_DREIECKE", "MOD_GROESSE", "MOD_URSPRUNG", "MOD_HINWEIS", "MOD_SPEICHER", "MOD_UNBENUTZT",
+          "MOD_ANIM_KOLLISION"}
     if not os.path.exists(em.tabelle_pfad(projekt)):
         return gp
     try:
@@ -1234,6 +1246,9 @@ def modelle_pruefen(projekt, m, umgebung=None) -> set:
         for text in s.get("hinweise") or []:
             if "triangles in LOD 0" not in text:
                 m.append(meldung("MOD_HINWEIS", "Model usr_%s: %s" % (name, text), o))
+        if s.get("animation") and e.get("animation", "an") == "an" and e.get("kollision") == "quader":
+            m.append(meldung("MOD_ANIM_KOLLISION", "Model usr_%s moves, but its collision box stays at the rest pose"
+                             % name, o))
         speicher += int(s.get("textur_bytes", 0)) + int(s.get("geometrie_bytes", 0))
     if speicher > MOD_SPEICHER_MB * 1e6:
         m.append(meldung("MOD_SPEICHER", "Own models need %.0f MB (textures and geometry stay in memory)"
@@ -1329,7 +1344,7 @@ def _geometrie_pruefen(ml, param, m, welt_bei):
         m.append(meldung("FIA_KENNWERT", "Banking %.1f° at %.0f m (FIA ≤ %.1f°)" % (q, s, FIA_MAX_QUERNEIGUNG_GRAD),
                          ort(hl, s, welt_bei(s)), ist=_r(q), soll=FIA_MAX_QUERNEIGUNG_GRAD))
     # Startaufstellung: alle Plätze auf der Geraden, ohne Querneigung (Issue #5)
-    gp |= {"GRID_IN_KURVE", "BOX_BEGRENZT"}
+    gp |= {"GRID_IN_KURVE", "BOX_BEGRENZT", "BOX_ANZAHL_ANGEHOBEN"}
     if pg:
         laenge = float(pg.get("fahrzeuglaenge_m", 5.6))
         schlimm = None
@@ -1351,7 +1366,11 @@ def _geometrie_pruefen(ml, param, m, welt_bei):
                              ort(hl, schlimm[1], welt_bei(schlimm[1])), ist=schlimm[0], soll="<= %d" % n_ok))
     pbox = param.get("boxengasse") or {}
     if pbox.get("aktiv"):
-        from .querprofil import boxen_begrenzen, boxen_uebergaenge
+        from .querprofil import BOXEN_MIN, boxen_anzahl, boxen_begrenzen, boxen_uebergaenge
+        if 0 < int(pbox.get("boxen") or 0) < BOXEN_MIN:
+            m.append(meldung("BOX_ANZAHL_ANGEHOBEN", "%d pit boxes requested, the build places %d (the carrier has %d "
+                                                     "teams plus MyTeam)" % (pbox["boxen"], boxen_anzahl(pbox), BOXEN_MIN),
+                             ort(hl, 0.0, welt_bei(0.0)), ist=pbox["boxen"], soll=">= %d" % BOXEN_MIN))
         vor, nach, grund = boxen_begrenzen(pbox, st.s, ml.bank, L)
         ue = boxen_uebergaenge(pbox, vor + nach)
         if ue["verkuerzt"]:
@@ -1445,11 +1464,41 @@ def ki_tempospanne(logik):
     return p["v_min_kmh"], p["v_max_kmh"]
 
 
+#: Wulst näher als dies an der Ideallinie (Fahrzeugmitte): halbe Autobreite 1,0 m + 1,0 m Spielraum. Die Ideallinie
+#: bleibt ≥ 1,48 m vom Fahrbahnrand (gemessen 25.11.2026): ein Wulst direkt am Rand ohne Randstein wird gemeldet,
+#: einer hinter einem 1,5-m-Randstein (≥ 3 m) nicht
+WULST_IDEALLINIE_M = 2.0
+
+
+def _wulst_ideallinie(netz, logik, v, m):
+    """WU-01: Punkte der Wulstrandsteine im Umkreis ``WULST_IDEALLINIE_M`` um die Ideallinie (Draufsicht)."""
+    from .definition import OBERFLAECHEN
+    namen = netz["namen"] if netz is not None and netz["namen"] else OBERFLAECHEN   # Ergebnis im Speicher: ohne Namen
+    if netz is None or "wulst" not in namen:
+        return
+    linie = np.asarray((logik.get("ideallinie") or {}).get("position") or [], float).reshape(-1, 3)
+    sel = netz["oberflaeche"] == namen.index("wulst")
+    if not len(linie) or not sel.any():
+        return
+    w = np.asarray(netz["vertices"], float)[np.unique(netz["dreiecke"][sel])]
+    nah = np.zeros(len(w), bool)
+    for a in range(0, len(w), 2048):
+        d2 = ((w[a:a + 2048, None, 0] - linie[None, :, 0]) ** 2 + (w[a:a + 2048, None, 2] - linie[None, :, 2]) ** 2)
+        nah[a:a + 2048] = d2.min(1) < WULST_IDEALLINIE_M ** 2
+    if nah.any():
+        p = w[np.flatnonzero(nah)[0]]
+        m.append(meldung("WULST_AUF_IDEALLINIE", "%d points of sausage kerbs lie within %.1f m of the racing line (first "
+                                                 "at x %.0f, z %.0f): cars that use the edge of the track hit them. "
+                                                 "Move them further out or add a kerb in front"
+                         % (int(nah.sum()), WULST_IDEALLINIE_M, p[0] + v[0], p[2] + v[2]),
+                         ort(None, None, p + v), ist=int(nah.sum()), soll=0))
+
+
 def _generator_pruefen(erg, d, v, m):
     import json
     import os
     gp = {"DRS_ANZAHL", "BOX_FEHLT", "KI_KURVEN_FUER_BREMSLINIEN", "BOX_MAUER_AUF_BOXENLINIE", "LAGE_AUSSERHALB_AO",
-          "LAGE_AUSSERHALB_LOCH", "KI_OHNE_BREMSZONE"}
+          "LAGE_AUSSERHALB_LOCH", "KI_OHNE_BREMSZONE", "WULST_AUF_IDEALLINIE"}
     netz = None
     if isinstance(erg, (str, os.PathLike)):
         with open(os.path.join(erg, "strecke_logik.json"), encoding="utf-8") as f:
@@ -1470,6 +1519,7 @@ def _generator_pruefen(erg, d, v, m):
     if len(logik.get("drs", [])) < soll:
         m.append(meldung("DRS_ANZAHL", "Only %d of %d DRS zones created: no further suitable straight"
                          % (len(logik.get("drs", [])), soll), ist=len(logik.get("drs", [])), soll=soll))
+    _wulst_ideallinie(netz, logik, v, m)
     sp = logik["spielformate"]
     gp |= {"KI_GATES_VIELE", "PVS_ZELLEN_VIELE", "KI_KURVEN_ZUSAMMENGELEGT"}
     n_kurven = len(sp["AISplineData"].get("corner_start_lines") or [])
@@ -1492,13 +1542,20 @@ def _generator_pruefen(erg, d, v, m):
                                            "logik.gate_schritt_m larger" % (n_gates, ORIGINAL_MAX_GATES), ist=n_gates, soll=ORIGINAL_MAX_GATES))
     try:
         from . import spiel_pvs
-        zellen = len(spiel_pvs.zellen_berechnen(spiel_pvs.linien_aus_logik(logik), 60.0))
+        linien = spiel_pvs.linien_aus_logik(logik)
+        zellen = len(spiel_pvs.zellen_berechnen(linien, 60.0))
+        auto = spiel_pvs.korridor_auto(linien, ORIGINAL_MAX_PVS_ZELLEN) if zellen > ORIGINAL_MAX_PVS_ZELLEN else None
     except Exception:  # noqa: BLE001  (Schätzung ist nur ein Hinweis)
-        zellen = 0
+        zellen, auto = 0, None
     if zellen > ORIGINAL_MAX_PVS_ZELLEN:
-        m.append(meldung("PVS_ZELLEN_VIELE", "%d PVS cells with a 60 m corridor (originals at most %d): build with a "
-                                             "smaller --pvs-korridor" % (zellen, ORIGINAL_MAX_PVS_ZELLEN),
-                         ist=zellen, soll=ORIGINAL_MAX_PVS_ZELLEN))
+        # 20.11.2026: Der Bau verengt den Korridor selbst (--pvs-korridor auto, Editor „Automatic“)
+        if auto and auto[2]:
+            text = ("%d PVS cells with a 60 m corridor (originals at most %d): the build narrows the visibility corridor "
+                    "automatically to %.0f m (%d cells)" % (zellen, ORIGINAL_MAX_PVS_ZELLEN, auto[0], auto[1]))
+        else:
+            text = ("%d PVS cells with a 60 m corridor (originals at most %d), even 30 m is too many: make the track "
+                    "shorter" % (zellen, ORIGINAL_MAX_PVS_ZELLEN))
+        m.append(meldung("PVS_ZELLEN_VIELE", text, ist=zellen, soll=ORIGINAL_MAX_PVS_ZELLEN))
     pit = [s for s in sp["TrackSpace"]["splines"] if not s["closed"]]
     if not pit:
         m.append(meldung("BOX_FEHLT", "Generator logic has no pit lane; the carrier needs a pit line and pit zones"))

@@ -11,6 +11,8 @@ außen) und fünf Bänder dazwischen:
 
 Seitenraum-Abschnitte (``seitenraum.abschnitte``, 27.10.2026) überschreiben je Bereich und Seite Randsteinbreite,
 Grünstreifenbreite, Auslauf-Material und Barrierenabstand; ohne Abschnitte rechnet alles wie vorher.
+Wulstrandsteine (25.11.2026) setzen Abschnitte mit ``wulst_hoehe`` > 0: erhöhte Stücke hinter dem Randstein, eigene
+Klasse ``wulst`` über dem Grünstreifen (``wulst_stuecke``).
 Bänder ohne Breite fallen weg. Weil alle Abstände stetig in s verlaufen, ergibt sich ein
 lückenloses Netz (siehe geometrie.py). Die Barriere wird durch den freien Platz neben
 der Strecke begrenzt (andere Streckenteile, Innenseite enger Kurven).
@@ -56,6 +58,11 @@ class Querprofil:
             ei = np.column_stack([np.interp(sq, s_ext, e_ext[:, k]) for k in range(e.shape[1])])
             idx = np.clip(np.floor(sq / self.ds).astype(int), 0, len(self.s) - 1)
             erg[name] = {"e": ei, "band": self.seiten[name]["band"][idx]}
+            teile = self.seiten[name].get("teile")
+            if teile is not None:                    # Randsteinarten: Breiten/Höhen linear, Klasse nach Station
+                t_ext = np.vstack([teile, teile[:1]])
+                erg[name]["teile"] = np.column_stack([np.interp(sq, s_ext, t_ext[:, k]) for k in range(teile.shape[1])])
+                erg[name]["rs_klasse"] = self.seiten[name]["rs_klasse"][idx]
         mauer = np.interp(sq, s_ext, np.concatenate([self.boxenmauer, self.boxenmauer[:1]]))
         return erg, mauer
 
@@ -91,14 +98,28 @@ def boxen_spurversatz(pbox):
     return max(0.0, min(float(pbox.get("spur_versatz_m", 0.0)), breite / 2 - float(pbox.get("spur_halbbreite_m", 2.5))))
 
 
+#: Boxen, die der Träger mindestens belegt (Portimão-Mod 1.0.0/1.0.2: 11 Teams in Box 1–11; Box 12 = MyTeam, für sie
+#: hält ``garagen_u`` eine Garage mehr frei). Fehlende Boxen rechnet ``spiel_welt.plaetze_berechnen`` geradlinig hinter
+#: der letzten weiter; mehr als eine läge hinter dem Garagengebäude im Gras (PH-01, 17.11.2026,
+#: ``ego-werkzeuge/ergebnisse/ph01_pitgarage23.md``)
+BOXEN_MIN = 11
+
+
+def boxen_anzahl(pbox):
+    """Wirksame Boxenzahl: Eingabe ``boxen``, mindestens ``BOXEN_MIN``; 0 oder fehlend bleibt 0 (keine Boxen)."""
+    n = int(pbox.get("boxen") or 0)
+    return max(n, BOXEN_MIN) if n > 0 else 0
+
+
 def boxen_u(pbox, U):
     """Lage der Boxen längs der Boxengasse (m ab Einfahrtsbeginn): mittig im vollbreiten Abschnitt."""
     a = pbox["anlauf_m"] + pbox["uebergang_m"]
     b = U - a
-    span = (pbox["boxen"] - 1) * pbox["box_abstand_m"]
+    n = boxen_anzahl(pbox)
+    span = (n - 1) * pbox["box_abstand_m"]
     if span > b - a:
         raise ValueError("Pit boxes do not fit into the full-width section")
-    return (a + b) / 2 + (np.arange(pbox["boxen"]) - (pbox["boxen"] - 1) / 2) * pbox["box_abstand_m"]
+    return (a + b) / 2 + (np.arange(n) - (n - 1) / 2) * pbox["box_abstand_m"]
 
 
 def garagen_u(pbox, U):
@@ -125,7 +146,8 @@ BOX_MIN_ABSTAND_FAHRBAHN_M = 10.0
 
 def _boxen_spanne(pbox):
     """Länge der Boxenreihe samt MyTeam-Garage und je einer Box Luft (``garagen_u``, spiel_welt)."""
-    return (pbox.get("boxen", 0) + 2) * pbox.get("box_abstand_m", 0.0) if pbox.get("boxen") else 0.0
+    n = boxen_anzahl(pbox)
+    return (n + 2) * pbox.get("box_abstand_m", 0.0) if n else 0.0
 
 
 def boxen_mindestlaenge(pbox, verkuerzt=True):
@@ -248,10 +270,12 @@ def querprofil_berechnen(ml, param, kurven):
             if ab.get("auslauf") is not None:
                 kies[name][maske] = ab["auslauf"] == "kies"
     asphalt = {name: np.zeros(n, dtype=bool) for name, _ in SEITEN}
+    kunstrasen = {name: np.zeros(n, dtype=bool) for name, _ in SEITEN}
     for name in asphalt:
         for maske, ab in abschnitte[name]:
             if ab.get("auslauf") is not None:
                 asphalt[name][maske] = ab["auslauf"] == "asphalt"
+                kunstrasen[name][maske] = ab["auslauf"] == "kunstrasen"
 
     # ---- Boxengasse (Lage relativ zur Start-Ziel-Linie s = 0)
     keil = {name: np.zeros(n) for name, _ in SEITEN}
@@ -288,6 +312,7 @@ def querprofil_berechnen(ml, param, kurven):
         kerb[seite] = np.where(box_bereich, 0.0, kerb[seite])
         kies[seite] &= ~box_bereich
         asphalt[seite] &= ~box_bereich
+        kunstrasen[seite] &= ~box_bereich
         gu = garagen_u(pbox, U)
         if gu is not None:
             garage = box_bereich & (u >= gu[0]) & (u <= gu[1])
@@ -340,7 +365,20 @@ def querprofil_berechnen(ml, param, kurven):
                                  % int(np.sum(noetig > verfuegbar + 1e-6)))
             e_bar = np.maximum(e_bar, noetig)
         k = np.minimum(kerb[name], np.maximum(e_bar - e2, 0))
-        e3 = e2 + k
+        # Randsteinarten (25.11.2026): abgesenkter Randstein als äußerer Teil des Randsteinbands, Profilhöhe je Station
+        rs_param = param["randstein"]
+        tief_b = _werte(n, rs_param.get("tief_breite_m", 0.0), abschnitte[name], "tief_breite")
+        tief_t = _werte(n, rs_param.get("tief_m", 0.05), abschnitte[name], "tief_tiefe")
+        hoehe = _werte(n, rs_param.get("profil_hoehe_m", 0.0), abschnitte[name], "randstein_hoehe")
+        if pbox.get("aktiv") and name == pbox["seite"]:
+            tief_b = np.where(box_bereich, 0.0, tief_b)
+        tief_b = periodisch_mittel(tief_b, rampe)
+        tief_b = np.minimum(tief_b, np.maximum(e_bar - e2 - k, 0))
+        # Reste der Glättung unter 5 mm weg: sonst hauchdünne Teilstreifen, deren Zwischenpunkte beim Verschweißen
+        # zusammenfallen (nichtmannigfaltige Kanten)
+        k = np.where(k < 0.005, 0.0, k)
+        tief_b = np.where(tief_b < 0.005, 0.0, tief_b)
+        e3 = e2 + k + tief_b
         gruen = _ueberschreiben(np.full(n, float(pg["breite"])), abschnitte[name], "gruenstreifen_breite")
         if gruen is not None:
             gruen = periodisch_mittel(gruen, rampe)
@@ -358,13 +396,115 @@ def querprofil_berechnen(ml, param, kurven):
         band[:, 3] = np.where(boden, OBERFLAECHE["boxengasse"], OBERFLAECHE["gras"])
         band[:, 4] = np.where(asphalt[name], OBERFLAECHE["auslauf"],
                               np.where(kies[name], OBERFLAECHE["kies"], OBERFLAECHE["gras"]))
+        band[:, 4] = np.where(kunstrasen[name], OBERFLAECHE["kunstrasen"], band[:, 4])
+        rs_klasse = _randstein_klassen(k, ds, rs_param)
+        band[:, 2] = rs_klasse
         seiten[name] = {"e": e, "band": band, "frei": verfuegbar, "kies": kies[name],
-                        "randstein": k}
+                        "teile": np.column_stack([k, tief_b, hoehe, tief_t]), "rs_klasse": rs_klasse,
+                        "randstein": k, "wulst": _wulst_werte(param, abschnitte[name], n,
+                                                              box_bereich if (pbox.get("aktiv") and name == pbox["seite"])
+                                                              else None)}
 
     mauer = np.full(n, np.nan)
     if pbox.get("aktiv"):
         e1 = seiten[pbox["seite"]]["e"][:, 1]
         abst = e1 - pbox["mauer_abstand_m"]
         mauer = np.where(box_bereich & (abst > pg["breite"] * 0.5 + 1.0), abst, np.nan)
-    return Querprofil(s=st.s, ds=ds, seiten=seiten, boxenmauer=mauer, box=box_info,
-                      warnungen=warnungen)
+    qp = Querprofil(s=st.s, ds=ds, seiten=seiten, boxenmauer=mauer, box=box_info, warnungen=warnungen)
+    qp.wulst = wulst_stuecke(qp, param, L)
+    weg = sum(1 for w in qp.wulst if w.get("kein_platz"))
+    if weg:
+        warnungen.append("Sausage kerbs: %d pieces left out (no room before the barrier)" % weg)
+    qp.wulst = [w for w in qp.wulst if not w.get("kein_platz")]
+    return qp
+
+
+# ------------------------------------------------------------------ Randsteinarten (25.11.2026, docs/kerbtypen.md)
+#: Länge der Anfangs- und Endstücke (eine Musterlänge des Randsteins, Portimão 3,4 m)
+RANDSTEIN_ENDE_M = 3.4
+
+
+def _werte(n, standard, abschnitte, feld):
+    """Je Station der Wert aus den Seitenraum-Abschnitten (späterer gewinnt), sonst ``standard``."""
+    werte = np.full(n, float(standard or 0.0))
+    for maske, ab in abschnitte:
+        if ab.get(feld) is not None:
+            werte[maske] = float(ab[feld])
+    return werte
+
+
+def _randstein_klassen(k, ds, rs_param):
+    """Oberflächenklasse des Randsteins je Station: Anfangs- und Endstück an den Enden jedes Randsteins (weiß,
+    abgerundet), dazwischen das rot-weiße Mittelstück. Ohne ``enden`` überall das Mittelstück."""
+    from .mittellinie import laeufe
+    n = len(k)
+    klasse = np.full(n, OBERFLAECHE["randstein"], np.int16)
+    if not rs_param.get("enden", True):
+        return klasse
+    laenge = max(1, int(round(RANDSTEIN_ENDE_M / ds)))
+    for a, e in laeufe(k > 0.05):
+        if e - a >= n:                    # Randstein rundum: keine Enden
+            continue
+        stueck = min(laenge, max(1, (e - a) // 2))
+        klasse[np.arange(a, a + stueck) % n] = OBERFLAECHE["randstein_anfang"]
+        klasse[np.arange(e - stueck, e) % n] = OBERFLAECHE["randstein_ende"]
+    return klasse
+
+
+# ------------------------------------------------------------------ Wulstrandsteine (Sausage Kerbs)
+def _wulst_werte(param, abschnitte, n, box_bereich):
+    """Je Station Höhe (0 = keiner), Breite und Abstand hinter dem Randstein aus den Seitenraum-Abschnitten."""
+    pw = param.get("wulst") or {}
+    hoehe = np.zeros(n)
+    breite = np.full(n, float(pw.get("breite_m", 0.6)))
+    abstand = np.full(n, float(pw.get("abstand_m", 0.1)))
+    stueck = np.full(n, float(pw.get("stueck_m", 4.0)))
+    luecke = np.full(n, float(pw.get("luecke_m", 0.0)))
+    for maske, ab in abschnitte:
+        for feld, ziel in (("wulst_hoehe", hoehe), ("wulst_breite", breite), ("wulst_abstand", abstand),
+                           ("wulst_stueck", stueck), ("wulst_luecke", luecke)):
+            if ab.get(feld) is not None:
+                ziel[maske] = float(ab[feld])
+    if box_bereich is not None:
+        hoehe[box_bereich] = 0.0
+    return {"hoehe": hoehe, "breite": breite, "abstand": abstand, "stueck": stueck, "luecke": luecke}
+
+
+def wulst_stuecke(qp, param, laenge):
+    """Stücke der Wulstrandsteine: je zusammenhängendem Bereich mit Höhe > 0 Stücke von ``stueck_m`` mit
+    ``luecke_m`` dazwischen (je Abschnitt ``wulst_stueck``/``wulst_luecke``). Rückgabe [{"seite", "s0", "s1",
+    "innen_m" (ab Fahrbahnrand), "breite_m", "hoehe_m", "rampe_anfang", "rampe_ende"}]. Ohne Lücke stoßen die Stücke
+    aneinander und laufen nur am Anfang und Ende des Bereichs schräg aus (durchgehender Wulst, Standard seit
+    25.11.2026). Stücke ohne Platz vor der Barriere sind mit ``kein_platz`` markiert."""
+    from .mittellinie import laeufe
+    n, ds = len(qp.s), qp.ds
+    erg = []
+    for name, _ in SEITEN:
+        seite = qp.seiten[name]
+        w = seite["wulst"]
+        for a, e in laeufe(w["hoehe"] > 1e-6):
+            s_a, s_e = a * ds, e * ds
+            s0 = s_a
+            while s0 < s_e - 0.5:
+                j = int(round(s0 / ds)) % n
+                stueck = max(float(w["stueck"][j]), 0.5)
+                luecke = max(float(w["luecke"][j]), 0.0)
+                s1 = min(s0 + stueck, s_e)
+                if s_e - s1 < 0.5:                      # kein Reststück unter 0,5 m
+                    s1 = s_e
+                i = int(round((s0 + s1) / 2 / ds)) % n
+                innen = float(seite["e"][i, 3] + w["abstand"][i])
+                breite, hoehe = float(w["breite"][i]), float(w["hoehe"][i])
+                stueck_info = {"seite": name, "s0": float(s0), "s1": float(s1), "innen_m": innen, "breite_m": breite,
+                               "hoehe_m": hoehe, "rampe_anfang": luecke > 0 or s0 <= s_a + 1e-9,
+                               "rampe_ende": luecke > 0 or s1 >= s_e - 1e-9}
+                if innen + breite > float(seite["e"][i, 5]) - 0.3 or innen < 0:
+                    stueck_info["kein_platz"] = True
+                erg.append(stueck_info)
+                s0 = s1 + luecke
+    return erg
+
+
+def wulst_profil(t, hoehe):
+    """Querprofil eines Wulsts: gerundet (sin^0,7), 0 an beiden Kanten; ``t`` 0…1 über die Breite."""
+    return hoehe * np.sin(np.pi * np.clip(t, 0.0, 1.0)) ** 0.7

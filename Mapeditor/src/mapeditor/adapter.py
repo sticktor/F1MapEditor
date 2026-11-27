@@ -124,11 +124,63 @@ def swofty_traeger_plan(paket, traeger=None, installiert=()):
 def swofty_installierte(programm):
     """Ids der installierten Addons (``swofty addons list``); leer, wenn der Launcher nicht antwortet."""
     try:
-        lauf = subprocess.run([str(programm), "addons", "list"], capture_output=True, text=True, timeout=60,
+        lauf = subprocess.run(swofty_liste_befehl(programm), capture_output=True, text=True, timeout=60,
                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     except (OSError, subprocess.SubprocessError):
         return set()
-    return {zeile.split()[0] for zeile in lauf.stdout.splitlines() if zeile.strip()}
+    return swofty_ids_aus_liste(lauf.stdout)
+
+
+def swofty_liste_befehl(programm):
+    return [str(programm), "addons", "list"]
+
+
+def swofty_ids_aus_liste(text):
+    """Addon-Ids aus der Ausgabe von ``swofty addons list`` (erste Spalte je Zeile)."""
+    return {zeile.split()[0] for zeile in (text or "").splitlines() if zeile.strip()}
+
+
+def swofty_addons(programm, datenordner=None):
+    """Installierte Addons (20.11.2026): [{id, version, zustand, name, gb, braucht}] aus ``swofty addons list`` und den
+    ``swofty.json`` im Datenordner (``%LOCALAPPDATA%\\Swofty\\addons``); leer, wenn der Launcher nicht antwortet."""
+    try:
+        lauf = subprocess.run([str(programm), "addons", "list"], capture_output=True, text=True, timeout=60,
+                              encoding="utf-8", errors="replace",
+                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except (OSError, subprocess.SubprocessError):
+        return []
+    daten = Path(datenordner) if datenordner else Path(os.environ.get("LOCALAPPDATA", "")) / "Swofty" / "addons"
+    erg = []
+    for zeile in lauf.stdout.splitlines():
+        teile = zeile.split(None, 3)
+        if len(teile) < 3:
+            continue
+        kennung, version, zustand = teile[0], teile[1], teile[2]
+        name = teile[3] if len(teile) > 3 else ""
+        if zustand == "built" and name.startswith("in "):           # „built in“ (Kern des Launchers)
+            zustand, name = "built in", name[3:].strip()
+        ordner = daten / kennung
+        groesse, braucht = 0, []
+        if ordner.is_dir():
+            for datei in ordner.rglob("*"):
+                if datei.is_file():
+                    groesse += datei.stat().st_size
+                    if datei.name == "swofty.json" and not braucht:
+                        try:
+                            braucht = [r.get("id") for r in json.loads(datei.read_text(encoding="utf-8")).get("requires") or []
+                                       if r.get("id") and r.get("id") != kennung]
+                        except (OSError, ValueError):
+                            pass
+        erg.append({"id": kennung, "version": version, "zustand": zustand, "name": name.strip(),
+                    "gb": round(groesse / 1024 ** 3, 2), "braucht": braucht})
+    return erg
+
+
+def swofty_addon_befehl(programm, aktion, kennung):
+    """Ein Befehl ``swofty addons enable|disable|remove <id>``."""
+    if aktion not in ("enable", "disable", "remove"):
+        raise ValueError(aktion)
+    return [str(programm), "addons", aktion, str(kennung)]
 
 
 def swofty_starten(programm):
@@ -194,6 +246,11 @@ def _option_args(options):
         if pvs not in BUILD_PVS:
             raise ValueError(tr("PVS variant {pvs!r} unknown.", pvs=pvs))
         args += ["--pvs-variante", pvs]
+    korridor = options.get("pvs_korridor") or 0
+    if korridor:
+        if not isinstance(korridor, (int, float)) or not 20 <= korridor <= 200:
+            raise ValueError(tr("Visibility corridor {wert!r} outside 20–200 m.", wert=korridor))
+        args += ["--pvs-korridor", str(int(korridor))]
     flagge = options.get("flagge")
     if flagge:
         if Path(flagge).suffix.lower() not in BUILD_FLAGGEN or not Path(flagge).is_file():
@@ -222,6 +279,11 @@ def _option_args(options):
         if not re.fullmatch(r"[A-Za-z0-9_]+", asphalt):
             raise ValueError(tr("Unknown track surface {wert!r}.", wert=asphalt))
         args += ["--asphalt-vorlage", asphalt]
+        ton = options.get("asphalt_farbton") or "neutral"
+        if ton not in ("neutral", "vorlage"):
+            raise ValueError(tr("Unknown colour tone {wert!r}.", wert=ton))
+        if ton == "vorlage":
+            args += ["--asphalt-farbton", "vorlage"]
     skid = (options.get("skid_vorlage") or "").strip()
     if skid and skid != "traeger":
         if not re.fullmatch(r"[A-Za-z0-9_]+", skid):
@@ -557,6 +619,32 @@ def calculate_preview(request):
                        "distances": profile["e"][indices].tolist()}
         if getattr(ml, "rand", None) is not None:      # Randwinkel: Höhe je Meter nach außen
             sides[side]["edge_slope"] = ml.rand[0 if side == "links" else 1][indices].tolist()
+    # Randsteinarten: Anteile (Randstein, abgesenkt) je Station und Umrisse der abgesenkten Randsteine
+    negative_kerbs = []
+    from strecke.mittellinie import laeufe as _laeufe
+    for side, sign, width in (("links", 1, st.wl), ("rechts", -1, st.wr)):
+        profile = qp.seiten[side]
+        teile = profile.get("teile")
+        if teile is None:
+            continue
+        sides[side]["kerb_parts"] = teile[indices][:, :2].tolist()
+        for a, e in _laeufe(teile[:, 1] > 0.05):
+            ids = np.arange(a, e + 1) % len(teile)
+            inner = pos[ids] + normal[ids] * (sign * (width[ids] + profile["e"][ids, 2] + teile[ids, 0]))[:, None]
+            outer = pos[ids] + normal[ids] * (sign * (width[ids] + profile["e"][ids, 3]))[:, None]
+            negative_kerbs.append(inner[::max(1, len(ids) // 400)].tolist() + outer[::-1][::max(1, len(ids) // 400)].tolist())
+    # Wulstrandsteine (Sausage Kerbs): Umriss je Stück (innen hin, außen zurück) in der Draufsicht
+    sausages = []
+    for w in getattr(qp, "wulst", None) or []:
+        ss = np.linspace(w["s0"], w["s1"], max(2, int(np.ceil((w["s1"] - w["s0"]) / 1.0)) + 1))
+        sub = ml.stationen(ss)
+        sign = 1.0 if w["seite"] == "links" else -1.0
+        edge = sub.wl if sign > 0 else sub.wr
+        inner = sub.pos[:, [0, 2]] + sub.nl * (sign * (edge + w["innen_m"]))[:, None]
+        outer = sub.pos[:, [0, 2]] + sub.nl * (sign * (edge + w["innen_m"] + w["breite_m"]))[:, None]
+        sausages.append({"side": w["seite"], "s0": float(w["s0"]), "s1": float(w["s1"]), "height": w["hoehe_m"],
+                         "inner": w["innen_m"], "width": w["breite_m"],
+                         "outline": inner.tolist() + outer[::-1].tolist()})
     source_positions = defn.punkte.tolist()
     # Stationen der Eingabeobjekte aus dem Werkzeug-Spline, keine zweite Geometrie.
     # Stationen der Eingabeobjekte aus dem Werkzeug (bei Approximation liegen die Spline-Knoten nicht mehr auf den Punkten)
@@ -599,7 +687,8 @@ def calculate_preview(request):
             "direction": ml.laufrichtung(), "source_count": len(defn.punkte),
             "edge_reach": float((defn.param.get("seitenraum") or {}).get("rand_breite_m", 12.0)),
             "line_width": defn.param["fahrbahn"]["randlinie_breite"], "barrier": defn.param["barriere"],
-            "zones": zones, "s_start": float(getattr(ml, "s_start", 0.0))}
+            "zones": zones, "s_start": float(getattr(ml, "s_start", 0.0)), "sausages": sausages,
+            "negative_kerbs": negative_kerbs}
 
 
 def check_key(raw, basis, shift):
@@ -723,8 +812,15 @@ def calculate_analysis(request):
         erg = None              # Meldung liefert die Prüfung unten (DEF_UNGUELTIG / Generator)
     report = pruefregeln.vorab_pruefen(raw, basisordner=basis, versatz=request.get("shift", [0, 0, 0]),
                                        generator=erg, mit_generator=erg is None, bauoptionen=options)
+    netz_3d = None
+    if erg is not None and request.get("netz_3d"):      # 3D-Ansicht (21.11.2026): Netz und Logik ablegen
+        from .ansicht3d import szene_speichern
+        try:
+            netz_3d = szene_speichern(request["netz_3d"], erg)
+        except (OSError, ValueError, KeyError, TypeError):
+            netz_3d = None
     return {"issues": [issue_from_message(m) for m in report["meldungen"]], "report": report,
-            "analysis": analysis_summary(erg) if erg is not None else None}
+            "analysis": analysis_summary(erg) if erg is not None else None, "netz_3d": netz_3d}
 
 
 NEW_MANIFEST = {"schema": 1, "definition": "definition.json", "runde_geschlossen": True,
@@ -1033,7 +1129,8 @@ def calculate_model_import(request):
     em = _eigene_modelle_modul(request.get("toolkit"))
     if em is None:
         raise ValueError(tr("The toolkit cannot import own models yet (strecke/eigene_modelle.py is missing)."))
-    optionen = {k: v for k, v in (request.get("optionen") or {}).items() if v is not None}
+    erlaubt = set(getattr(em, "STANDARD", {}))
+    optionen = {k: v for k, v in (request.get("optionen") or {}).items() if v is not None and (not erlaubt or k in erlaubt)}
     eintrag = em.hinzufuegen(request["projekt"], request["datei"], name=request.get("name"),
                              lods=request.get("lods") or (), ersetzen=bool(request.get("ersetzen")), **optionen)
     eintrag["modell"] = em.kennung(eintrag["name"])
@@ -1056,7 +1153,215 @@ def calculate_model_change(request):
     optionen = {k: v for k, v in (request.get("optionen") or {}).items()}
     if "kollision" in optionen and "kollision" not in getattr(em, "STANDARD", {}):
         raise ValueError(tr("The toolkit cannot give own models a collision yet (update the toolkit)."))
+    if "animation" in optionen and "animation" not in getattr(em, "STANDARD", {}):
+        raise ValueError(tr("The toolkit cannot play animations of own models yet (update the toolkit)."))
     return em.aendern(request["projekt"], request["name"], **optionen)
+
+
+#: Fassung der Modelle im Zwischenspeicher der 3D-Ansicht (Teile je Material, 27.11.2026; = ansicht3d.MODELL_3D_FASSUNG)
+MODELL_3D_FASSUNG = 3
+#: Teilnetze ohne sichtbare Fläche in der Ansicht (Schattenkarten, Billboard der Fernstufe)
+MODELL_3D_OHNE = ("shadow", "billboard")
+
+
+def _modell_stufe(lm_stufen, pflanze: bool) -> int:
+    """LOD für die Ansicht: Pflanzen Stufe 1 (Stufe 2 ist dort das Billboard), sonst die mittlere Stufe."""
+    if lm_stufen <= 1:
+        return 0
+    return min(1 if pflanze else 2, lm_stufen - 1)
+
+
+def _alpha_ausbluten(bild):
+    """Durchsichtige Pixel bekommen die mittlere Farbe der sichtbaren (Alpha-Bleeding): Die Spieltexturen sind dort
+    weiß, die Mip-Stufen der Ansicht mischten das Weiß in ferne Blätter (weiße Bäume)."""
+    import numpy as np
+    from PIL import Image
+    a = np.asarray(bild.convert("RGBA")).copy()
+    sichtbar = a[..., 3] >= 128
+    if sichtbar.any() and (~sichtbar).any():
+        a[~sichtbar, :3] = a[sichtbar, :3].reshape(-1, 3).mean(0).astype(np.uint8)
+    return Image.fromarray(a, "RGBA")
+
+
+def _modell_3d(idx, modell, ziel, pflanze=False):
+    """Ein Katalogmodell für die 3D-Ansicht (27.11.2026, Mapeditor/docs/3d_baeume.md): **Teile je Material** im
+    Modellraum, je Teil ``.npz`` (pos, nor, uv, idx) und Farbtextur ``.png`` (höchstens 512 px); Teile mit
+    ``me_alphaThreshold`` (Blätter, Wedel, Gitter) als RGBA mit ``maske`` = Schwelle. Schatten- und Billboard-Teile
+    entfallen. Beschreibung in ``<ziel>.json`` (der Editor liest sie ohne Arbeitsprozess)."""
+    import numpy as np
+    from ego import grafik, grafik_textur
+    from strecke import ansicht_assets
+    from strecke import umgebung as umg
+    ziel = Path(ziel)
+    ziel.parent.mkdir(parents=True, exist_ok=True)
+    lm = grafik.modell_laden(idx, modell + ".idf?model", lod=0)
+    stufe = _modell_stufe(len(lm.meshes), pflanze)
+    netze = []
+    for lod in range(stufe, -1, -1):              # Stufe ohne sichtbare Teile (nur Billboard): nächst feinere
+        lm = grafik.modell_laden(idx, modell + ".idf?model", lod=lod)
+        netze = [n for n in lm.netze if len(n.dreiecke) and not any(w in str(n.material).lower() for w in MODELL_3D_OHNE)]
+        if netze:
+            stufe = lod
+            break
+    if not netze:
+        raise ValueError("Model without triangles: %s" % modell)
+    basis_k = grafik.basis_kennung(lm.kennung)
+    emb = idx.get(basis_k[:-4] + ".emb?context=default")
+    bindung = grafik.MaterialBindung.aus_bytes(emb.data()) if emb is not None else None
+    spiel = umg.spielordner_finden()
+    ordner = ([os.path.join(spiel, g) for g in ("2025_asset_groups", "2021_asset_groups")] + [spiel]) if spiel else []
+
+    def mip(t):
+        return grafik_textur.extern_datei_finden(t, ordner) if ordner else None
+
+    je_material = {}
+    for n in netze:
+        je_material.setdefault(str(n.material), []).append(n)
+    teile = []
+    for k, (slot, liste) in enumerate(sorted(je_material.items())):
+        pos, nor, uv, tri, basis = [], [], [], [], 0
+        for n in liste:
+            pos.append(n.positionen)
+            nor.append(n.normalen if n.normalen is not None else grafik.normalen_berechnen(n.positionen, n.dreiecke))
+            uv.append(n.uvs if n.uvs is not None else np.zeros((len(n.positionen), 2), np.float32))
+            tri.append(n.dreiecke + basis)
+            basis += len(n.positionen)
+        npz = ziel.with_name("%s_%d.npz" % (ziel.stem, k))
+        np.savez(npz, pos=np.concatenate(pos).astype(np.float32), nor=np.concatenate(nor).astype(np.float32),
+                 uv=np.concatenate(uv).astype(np.float32), idx=np.concatenate(tri).ravel().astype(np.uint32))
+        teil = {"npz": str(npz), "png": None, "maske": None, "material": slot}
+        try:                                       # Textur ist Beiwerk
+            mk = bindung.material_fuer(slot) if bindung is not None else None
+            mr = idx.get(mk) if mk else None
+            if mr is not None:
+                mat = grafik.Material.aus_bytes(mr.data())
+                schwelle = (mat.konstanten().get("me_alphaThreshold") or (None,))[0]
+                if schwelle is not None:
+                    teil["maske"] = round(float(schwelle), 3)
+                kennung = ansicht_assets._albedo(mat)
+                bild = ansicht_assets.textur_bild(idx, kennung, mip, 512, alpha=teil["maske"] is not None)
+                if bild is not None and teil["maske"] is not None:
+                    bild = _alpha_ausbluten(bild)
+                if bild is not None:
+                    png = npz.with_suffix(".png")
+                    bild.save(png, compress_level=1)
+                    teil["png"] = str(png)
+        except Exception:  # noqa: BLE001
+            pass
+        teile.append(teil)
+    erg = {"fassung": MODELL_3D_FASSUNG, "teile": teile, "lod": stufe,
+           "npz": teile[0]["npz"], "png": next((t["png"] for t in teile if t["png"]), None)}
+    tmp = ziel.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(erg), encoding="utf-8")
+    os.replace(tmp, ziel.with_suffix(".json"))
+    return erg
+
+
+def _modelle_gruppe(auftrag):
+    """Arbeitsprozess (``ego.parallel``): alle Modelle einer Quell-ERP mit einem Index. Rückgabe {Modell: Ergebnis}."""
+    toolkit, quelle, liste = auftrag
+    sys.dont_write_bytecode = True
+    if str(toolkit) not in sys.path:
+        sys.path.insert(0, str(toolkit))
+    from strecke import umgebung as umg
+    erg = {}
+    try:
+        idx = umg._ressourcen_index(quelle)
+    except Exception as fehler:  # noqa: BLE001
+        return {m: {"error": str(fehler)} for m, _ziel, _p in liste}
+    try:
+        for modell, ziel, pflanze in liste:
+            try:
+                erg[modell] = _modell_3d(idx, modell, ziel, pflanze)
+            except Exception as fehler:  # noqa: BLE001  ein Modell darf die übrigen nicht verhindern
+                erg[modell] = {"error": str(fehler)}
+    finally:
+        idx.schliessen()
+    return erg
+
+
+def antwort_lesen(text):
+    """JSON-Antwort eines Arbeitsprozesses; steht davor Text (stderr ist mit stdout zusammengelegt, z. B. Meldungen
+    paralleler Arbeitsprozesse), gilt das JSON-Objekt, das bis zum Ende reicht."""
+    text = (text or "").strip()
+    try:
+        return json.loads(text)
+    except ValueError:
+        pass
+    dekoder = json.JSONDecoder()
+    i = text.find("{")
+    while i >= 0:
+        try:
+            wert, ende = dekoder.raw_decode(text, i)
+            if not text[ende:].strip() and isinstance(wert, dict):
+                return wert
+        except ValueError:
+            pass
+        i = text.find("{", i + 1)
+    raise ValueError(text[-300:])
+
+
+def calculate_model_3d(request):
+    """Arbeitsprozess (3D-Ansicht, Stufe 3): ein Katalogmodell aus dem Spielordner als Netz (``.npz``: pos, nor, uv, idx)
+    samt Farbtextur (``.png``) in den Zwischenspeicher legen. Nur lesend aus dem Spiel; die Dateien bleiben lokal."""
+    erg = calculate_models_3d({"toolkit": request.get("toolkit"),
+                               "auftraege": [{"modell": request["modell"], "ziel": request["ziel"]}]})
+    e = erg["modelle"].get(request["modell"]) or {"error": "?"}
+    if "error" in e:
+        raise ValueError(e["error"])
+    return e
+
+
+def calculate_models_3d(request):
+    """Arbeitsprozess: mehrere Katalogmodelle in einem Lauf (3d_ladeperformance.md): Katalog einmal, ein Index je
+    Quell-ERP, die Quellen parallel (``ego.parallel``). Antwort ``{"modelle": {Modell: {"npz", "png"} | {"error"}}}``."""
+    root = toolkit_path(request.get("toolkit"))
+    sys.dont_write_bytecode = True
+    sys.path.insert(0, str(root))
+    from ego import parallel
+    from strecke import umgebung as umg
+    katalog = umg.katalog()
+    index = umg.katalog_index(katalog)
+    gruppen, erg = {}, {}
+    for a in request.get("auftraege") or []:
+        eintrag = index.get(a["modell"])
+        if eintrag is None:
+            erg[a["modell"]] = {"error": "Model not in the catalogue: %s" % a["modell"]}
+            continue
+        pflanze = eintrag.get("kategorie") in ("baum", "busch", "palme")
+        gruppen.setdefault(umg.quelle_pfad(eintrag, katalog), []).append((a["modell"], a["ziel"], pflanze))
+    auftraege = [(str(root), q, liste) for q, liste in sorted(gruppen.items())]
+    if auftraege:
+        # über den Modulnamen, nicht __main__ (Quelltextstart ``-m mapeditor.adapter``): sonst finden die
+        # Arbeitsprozesse die Funktion nicht
+        import importlib
+        gruppe = importlib.import_module("mapeditor.adapter")._modelle_gruppe
+        for teil in parallel.abbilden(gruppe, auftraege, prozesse=min(len(auftraege), 8)):
+            erg.update(teil)
+    return {"modelle": erg}
+
+
+def calculate_game_assets_3d(request):
+    """Arbeitsprozess (3D-Ansicht, Spielgrafik, docs/3d_spielassets.md): echte Oberflächen, Außengelände und die Welt
+    des Trägers nach den Bauschritten (``strecke.ansicht_assets.vorbereiten``). Nur lesend aus Trägerpaket und
+    Spielordner; Ergebnis als PNG/NPZ im Zwischenspeicher des Nutzers."""
+    root = toolkit_path(request.get("toolkit"))
+    sys.dont_write_bytecode = True
+    sys.path.insert(0, str(root))
+    try:
+        from strecke import ansicht_assets
+    except ImportError as fehler:
+        raise ValueError(tr("The toolkit cannot prepare game assets yet (strecke/ansicht_assets.py is missing)."))             from fehler
+    traeger = Path(request["traeger"])
+    if not traeger.is_file():
+        raise ValueError(tr("Carrier package not found: {pfad}", pfad=str(traeger)))
+    erg = ansicht_assets.vorbereiten(str(traeger), request["szene"], request["cache"],
+                                     welt_json=request.get("welt"), umgebung_daten=request.get("umgebung"),
+                                     versatz=request.get("versatz") or (0.0, 0.0, 0.0), bauen=request.get("bauen"),
+                                     teile=tuple(request.get("teile") or ("oberflaechen", "aussen", "welt")))
+    from .ansicht3d import assets_index_schreiben
+    assets_index_schreiben(request, erg)          # nächstes Mal liest der Editor es ohne Arbeitsprozess
+    return erg
 
 
 def calculate_env_preview(request):
@@ -1129,6 +1434,9 @@ def worker_main():
                   calculate_env_preview(request) if task == "umgebung_vorschau" else
                   calculate_env_check(request) if task == "umgebung_pruefen" else
                   calculate_model_import(request) if task == "modell_importieren" else
+                  calculate_model_3d(request) if task == "modell_3d" else
+                  calculate_models_3d(request) if task == "modelle_3d" else
+                  calculate_game_assets_3d(request) if task == "spielassets_3d" else
                   calculate_model_remove(request) if task == "modell_entfernen" else
                   calculate_model_change(request) if task == "modell_aendern" else
                   calculate_game_tracks(request) if task == "spielstrecken" else

@@ -23,6 +23,29 @@
 <tr><td><b>V</b> · <b>P</b></td><td>Auswahl- bzw. Punkte-Werkzeug</td></tr>
 <tr><td><b>Klick auf T4</b></td><td>Kurve groß zeigen (Bremszone bis Kurvenende, Infoschild mit Winkel, Radius, km/h, Tafeln)</td></tr>
 </table>
+<h3>Updates</h3>
+<p>Höchstens einmal am Tag fragt der Editor GitHub nach einer neuen Version (abschaltbar unter <i>Ansicht → Automatik</i>;
+es werden keine persönlichen Daten gesendet). Gibt es eine, zeigt ein Fenster ihre Release Notes: <b>Herunterladen und
+installieren</b> lädt sie, prüft sie und ersetzt diese Installation nach einem Neustart (Projekte, Einstellungen und
+Trägerpaket bleiben), <b>Diese Version überspringen</b> schweigt bis zur nächsten. <i>Hilfe → Nach Updates suchen …</i>
+fragt jederzeit, <i>Hilfe → Was ist neu …</i> zeigt die Release Notes dieser Version; nach einem Update erscheinen sie
+einmal von selbst.</p>
+<h3>Arbeitsbereiche und 3D-Ansicht</h3>
+<p>Die Reiter links in der Werkzeugleiste wechseln den <b>Arbeitsbereich</b>: <i>Strecke</i> (Karte, Eigenschaften, Höhen- und
+Neigungsprofil), <i>Umgebung</i> (Karte, Katalog, Objekteigenschaften, Werkzeug Platzieren), <i>3D</i> (Karte und
+3D-Ansicht nebeneinander), <i>Auswertung</i> (Prüfung und Auswertung) und <i>Alle</i> (alles auf einmal). Kürzel
+Strg+1 … Strg+5. Neben den Reitern zeigt die Leiste nur die Werkzeuge des Bereichs (<i>Strecke</i>: Auswahl, Punkte, Nachzeichnen, Kameras, Runde schließen; <i>Umgebung</i>: Auswahl, Platzieren, Bepflanzen); das Kürzel eines Werkzeugs aus einem anderen Bereich (z. B. U, B, N, K) wechselt dorthin. Projektname, Speicherstand und Ordner stehen in der Statusleiste. Was du in einem Bereich umstellst (Flächen und Reiter unter <i>Ansicht</i>, Teilergrößen, vorderer
+Reiter), merkt sich dieser Bereich; <i>Ansicht → Arbeitsbereich → Diesen Arbeitsbereich zurücksetzen</i> stellt die
+Vorgabe wieder her. Kartenebenen und Automatiken gelten überall gleich. <i>Ansicht → 3D-Ansicht im eigenen Fenster …</i>
+(Strg+Umschalt+3) löst die 3D-Ansicht in ein eigenes Fenster.</p>
+<p><b>3D-Kamera</b> (<i>Editor</i>): Linksziehen kreist um den Punkt unter der Maus, Mitte oder Umschalt+Linksziehen
+verschiebt, das Mausrad zoomt zur Maus, Doppelklick fliegt hin. Rechte Maustaste halten: umsehen und mit W A S D
+fliegen, Q/E runter/hoch, Umschalt schnell; das Mausrad stellt dann die Fluggeschwindigkeit ein (sie wächst auch mit der
+Höhe). Ohne rechte Maustaste bewegen W A S D parallel zum Boden. Pos1 zeigt die ganze Strecke, F holt das gewählte
+Objekt oder das Auto heran. <i>Onboard</i>, <i>Verfolger</i> und <i>TV</i> folgen dem Auto (<i>Abspielen</i>,
+Leertaste); Ziehen übernimmt von dort. <i>Bearbeiten</i> (Tab): Klick wählt und zieht Objekte, R dreht, Entf löscht.</p>
+<p><b>Spielgrafik</b> (Knopf in der 3D-Ansicht, wird gemerkt): Die Strecke bekommt die echten Oberflächen aus dem Spiel (Asphalt bzw. die gewählte Fahrbahn, Randstein-Atlas mit weißen Anfangs- und Endstücken, Wulstrandsteine, Gras und Kies in der gewählten Landschaft, Beton, Kunstrasen), dazu das Außengelände des Trägers mit deinen Bergen und den Farben des Baus sowie Garagen, Kommandostände, Livery-Tafeln und Entfernungstafeln des Trägers genau dort, wo der Bau sie hinsetzt (die Bauschritte laufen auf einer Kopie im Speicher). Barrieren, Zäune und Schilder des Trägers entfernt der Bau, sie erscheinen deshalb nicht. Alles wird nur aus dem Trägerpaket und dem F1-25-Ordner in einen lokalen Zwischenspeicher gelesen; beim ersten Mal dauert es etwa 15 Sekunden, danach geht es sofort. Mit Spielgrafik stehen die echten Entfernungstafeln des Trägers, sonst nummerierte Ersatztafeln. <i>Ebenen</i> blendet Außengelände und Boxengebäude ein und aus.</p>
+<p><b>Spielgrafik</b> (3D-Ansicht) ersetzt außerdem die einfachen Formen durch die Modelle des Spiels, auch Bäume, Büsche und Palmen mit ausgeschnittenen Blättern. Sie werden aus deinem F1-25-Ordner in einen lokalen Zwischenspeicher gelesen und als GPU-Instanzen gezeichnet, so bleiben auch Hunderte Bäume flüssig.</p>
 <h3>Ein- und ausblenden</h3>
 <p>Jede Funktion lässt sich zeigen oder verbergen: <i>Ansicht</i> → Kartenebenen (Raster, Ränder, Richtung,
 Spielbereich, Zonen, Ideallinie, Box/Startplätze/Sektoren, Kurvennummern, Eingabepunkte, Beschriftungen, Maßstab,
@@ -195,6 +218,23 @@ wird über den Launcher, offline und ohne EA AntiCheat. Ein Schnellaustausch ist
 Standard, <b>Wie die Strecke</b> setzt die Querneigung an jeder Stelle über die ersten 12 m fort, <b>Eigener Winkel</b> nimmt
 einen festen Wert (positiv steigt nach außen). Bereich und Seite wählst du wie bei den anderen Feldern, <b>Ganze Runde</b>
 nimmt die gesamte Strecke. Danach <b>Übernehmen</b>.</p>
+<h3>Randsteinarten</h3>
+<p>Im Reiter <b>Querschnitt</b> füllt <b>Randsteinart</b> die Felder darunter: <i>Flach</i>, <i>Erhöht</i> (Randstein
+4 cm über dem Asphalt mit schrägen Kanten, wie im Spiel), <i>Abgesenkt dahinter</i> (tiefer liegender Streifen hinter dem
+Randstein mit der Off-Track-Rumble-Physik des Spiels) und <i>Doppelt</i> (beides). <b>Randsteinhöhe</b>,
+<b>Abgesenkter Randstein</b> (Breite) und <b>Tiefe</b> lassen sich auch direkt setzen. Jeder Randstein beginnt und endet
+mit den weißen, abgerundeten Endstücken des Spiels. Unter <b>Auslauf</b> nimmt <i>Kunstrasen</i> den Kunstrasen von
+Melbourne; der Bau kopiert die Texturen aus deinem F1-25-Ordner (nur lesend), der Spielordner muss also eingestellt
+sein.</p>
+<h3>Wulstrandsteine</h3>
+<p>Im Reiter <b>Querschnitt</b> legt <b>Wulstrandstein</b> die Höhe erhöhter Randsteine hinter dem Randstein fest
+(echte 0,05–0,3 m, <i>keiner</i> = kein Wulst). <b>Wulstbreite</b> (Standard 0,6 m) und <b>Hinter Randstein</b>
+(Abstand vom äußeren Randsteinrand, Standard 0,1 m, negativ = auf dem Randstein) sind optional. Der Bau setzt einen durchgehenden,
+gerundeten Wulst mit abgeschrägten Enden am Anfang und Ende des Bereichs (<b>Stücklänge</b>, Standard 4 m, und
+<b>Lücke zwischen Stücken</b>, Standard 0 m, teilen ihn in einzelne Blöcke), im Wulstmaterial von Portimão und mit der Holperphysik
+des Spiels (<code>BUMP</code>). Karte, Querschnitt und 3D-Ansicht zeigen sie gelb. In der Boxengasse entstehen keine.
+Die Prüfung WU-01 warnt, wenn ein Wulst näher als 2 m an der Ideallinie liegt, etwa direkt am Fahrbahnrand ohne
+Randstein davor.</p>
 <h3>Boden und Umland</h3>
 <p>Unter <b>Erweiterte Bauoptionen</b> ersetzt <b>Eigene Boden- und Umlandkarten</b> die Luftbilder der Vorlage: Der Boden entsteht aus den Flächen der Strecke, die Ideallinie liegt auf dem Asphalt, und das Umland passt zu Hügeln und Bergen. <b>Landschaft</b> wählt Gras oder Wüste (ohne Bodenbewuchs), <b>Farbton</b> färbt Gras und Umland trocken, saftig oder herbstlich. Die Option ist von Anfang an eingeschaltet.</p>
 <h3>Eigenschaften</h3>

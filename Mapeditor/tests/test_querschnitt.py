@@ -200,3 +200,93 @@ def test_panel_writes_section_with_undo_and_generator_uses_it(app, example_previ
     finally:
         w.document.undo.setClean()
         w.close()
+
+
+def test_wulstrandstein_feld_vorschau_karte_und_ansicht(app, tmp_path):
+    """Wulstrandsteine (Sausage Kerbs, 25.11.2026): Felder im Reiter, Abschnitt, Vorschau mit Umrissen, Karte, Querschnitt."""
+    panel = querschnitt.CrossPanel()
+    f = panel.fields()
+    assert f["wulst_hoehe"] is None and f["wulst_breite"] is None and f["wulst_abstand"] is None
+    panel.sausage.setValue(0.15)
+    panel.sausage_width.setValue(0.8)
+    panel.sausage_gap.setValue(-0.5)                      # negativ = auf dem Randstein, kein Automatikwert
+    f = panel.fields()
+    assert (f["wulst_hoehe"], f["wulst_breite"], f["wulst_abstand"]) == (0.15, 0.8, -0.5)
+    panel.sausage_piece.setValue(6.0)
+    panel.sausage_spacing.setValue(0.0)                  # 0 = durchgehend, kein Automatikwert
+    f = panel.fields()
+    assert (f["wulst_stueck"], f["wulst_luecke"]) == (6.0, 0.0)
+    panel.load({"wulst_hoehe": 0.2})
+    assert panel.fields()["wulst_luecke"] is None and panel.fields()["wulst_stueck"] is None
+    assert panel.fields()["wulst_hoehe"] == 0.2 and panel.fields()["wulst_breite"] is None
+    project = Project.open(EXAMPLES / "teststrecke.json")
+    raw = copy.deepcopy(project.raw)
+    querschnitt.apply_section(raw, 2000.0, 2120.0, "beide", {"wulst_hoehe": 0.15, "randstein_breite": 1.5})
+    assert querschnitt.effective(raw, 2050.0, "rechts")["wulst_hoehe"] == 0.15
+    preview = calculate_preview({"raw": raw, "basis": str(project.basis), "shift": [-591, 0, -473]})
+    sausages = preview["sausages"]
+    assert len(sausages) == 60 and {s["side"] for s in sausages} == {"links", "rechts"}       # durchgehend: 120 m / 4 m
+    assert all(len(s["outline"]) >= 4 and s["inner"] > 1.5 and s["height"] == 0.15 for s in sausages)
+    # Karte zeichnet die Umrisse; die Querschnittsansicht zeigt den Wulst an der Cursorstelle
+    w = MainWindow(project, auto_preview=False)
+    w.resize(1400, 950)
+    w.show()
+    try:
+        w.install_preview(preview)
+        from PySide6.QtGui import QColor
+        from mapeditor.mapview import SAUSAGE_COLOR
+        farben = [item[2].name().upper() for item in w.map._preview_items if isinstance(item[2], QColor)]
+        assert farben.count(SAUSAGE_COLOR) == 60
+        ansicht = CrossSection()
+        ansicht.resize(1200, 320)
+        ansicht.preview = preview
+        ansicht.station = (sausages[0]["s0"] + sausages[0]["s1"]) / 2
+        bild = ansicht.grab().toImage()
+        gelb = sum(1 for x in range(0, bild.width(), 2) for y in range(0, bild.height(), 2)
+                   if QColor(bild.pixel(x, y)).name().upper() == SAUSAGE_COLOR)
+        assert gelb > 0
+    finally:
+        w.document.undo.setClean()
+        w.close()
+
+
+def test_randsteinarten_vorgaben_vorschau_und_karte(app):
+    """Randsteinarten (25.11.2026): Vorgaben füllen die Felder, Vorschau mit abgesenkten Randsteinen und Endstücken,
+    Kunstrasen als Auslauf."""
+    from mapeditor.querschnitt import KERB_TYPES
+    panel = querschnitt.CrossPanel()
+    panel.kerb_type.setCurrentIndex(panel.kerb_type.findData("doppelt"))
+    f = panel.fields()
+    assert (f["randstein_hoehe"], f["tief_breite"], f["tief_tiefe"]) == (0.04, 1.0, 0.05)
+    panel.kerb_type.setCurrentIndex(panel.kerb_type.findData("flach"))
+    f = panel.fields()
+    assert (f["randstein_hoehe"], f["tief_breite"], f["tief_tiefe"]) == (0.0, 0.0, 0.05)    # Tiefe bleibt
+    assert set(KERB_TYPES) == {None, "flach", "erhoeht", "tief", "doppelt"}
+    panel.runoff.setCurrentIndex(panel.runoff.findData("kunstrasen"))
+    assert panel.fields()["auslauf"] == "kunstrasen"
+    project = Project.open(EXAMPLES / "teststrecke.json")
+    raw = copy.deepcopy(project.raw)
+    querschnitt.apply_section(raw, 0.0, 4900.0, "beide", {"randstein_hoehe": 0.04, "tief_breite": 1.0})
+    querschnitt.apply_section(raw, 2000.0, 2300.0, "rechts", {"auslauf": "kunstrasen"})
+    preview = calculate_preview({"raw": raw, "basis": str(project.basis), "shift": [-591, 0, -473]})
+    assert preview["negative_kerbs"] and all(len(o) >= 4 for o in preview["negative_kerbs"])
+    rechts = preview["sides"]["rechts"]
+    assert any(parts[1] > 0.5 for parts in rechts["kerb_parts"])
+    klassen = {b[2] for side in preview["sides"].values() for b in side["bands"]}
+    assert {1, 11, 12} <= klassen                                  # Mittel-, Anfangs- und Endstück
+    assert any(b[4] == 14 for b in rechts["bands"])                # Kunstrasen
+    w = MainWindow(project, auto_preview=False)
+    try:
+        w.install_preview(preview)
+        from PySide6.QtGui import QColor
+        from mapeditor.mapview import MATERIALS
+        farben = [item[2].name().upper() for item in w.map._preview_items if isinstance(item[2], QColor)]
+        assert MATERIALS[13].upper() in farben and MATERIALS[14].upper() in farben
+        ansicht = CrossSection()
+        ansicht.resize(1200, 320)
+        ansicht.preview = preview
+        ansicht.station = 2100.0
+        ansicht.grab()                                              # zeichnet ohne Fehler
+    finally:
+        w.document.undo.setClean()
+        w.close()

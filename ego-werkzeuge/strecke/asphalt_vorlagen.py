@@ -104,8 +104,10 @@ def _hauptmaterial(kandidaten):
     return sorted(gut, key=rang)[0] if gut else None
 
 
-def _konstanten_uebernehmen(quelle: grafik.Material, ziel: grafik.Material) -> dict:
-    """Gemeinsame Tiling-/Detail-/Farb-Konstanten der Quelle → Ziel (nur float-Typen)."""
+def _konstanten_uebernehmen(quelle: grafik.Material, ziel: grafik.Material, farbton: str = "neutral") -> dict:
+    """Gemeinsame Tiling-/Detail-/Farb-Konstanten der Quelle → Ziel (nur float-Typen).
+
+    ``farbton``: ``neutral`` (Standard) = Farbtöne nur mit ihrer Helligkeit, ``vorlage`` = unverändert wie in der Vorlage."""
     float_typen = {3, 0x20003, 0x30003, 0x40003}
     q_param = {p.name: p for p in quelle.parameter if p.art == 1}
     z_namen = {p.name for p in ziel.parameter if p.art == 1}
@@ -123,7 +125,27 @@ def _konstanten_uebernehmen(quelle: grafik.Material, ziel: grafik.Material) -> d
                 "racingLine", "dust")):
             continue
         erg[name] = p.wert
+    # Farbstich (19.11.2026, Feature GP: Silverstone-Asphalt grün-grau): Der Grundfarbton der Vorlage ist auf die
+    # Luftbild-Makrokarte ihrer Strecke abgestimmt (Silverstone 0,60/0,64/0,69 kühl, Abu Dhabi 0,43/0,38/0,34 warm).
+    # Die Makrokarte übernehmen wir nicht, unter der Fahrbahn liegt neutrales Grau (Weltkarten 128/128/127) bzw. die
+    # des Trägers. Deshalb nur die Helligkeit übernehmen, den Farbton neutral setzen.
+    # 20.11.2026 (Bild des Nutzers, Feature GP): Auch der Staubton färbte die Fahrbahnränder olivgrün-grau. Der Staub liegt
+    # abseits der Ideallinie (TrackInfo-Karte), die Staubkarte ist gleichmäßiges Rauschen; Silverstone 1/0,79/0,39 (Blau am
+    # Rand im Bild 106 → 85). Deshalb gilt dasselbe für ``…Colour``/``…Color``.
+    if farbton not in FARBTOENE:
+        raise VorlagenFehler("Unknown colour tone %r (possible: %s)" % (farbton, ", ".join(FARBTOENE)))
+    if farbton == "vorlage":
+        return erg
+    for name in [n for n in erg if n.endswith(("Tint", "Colour", "Color")) and len(erg[n]) == 3]:
+        grau = sum(float(v) for v in erg[name]) / 3.0
+        erg[name] = (grau, grau, grau)
     return erg
+
+
+#: Farbton der Fahrbahnvorlage im Bau (20.11.2026): ``neutral`` = nur Helligkeit, ``vorlage`` = Farbe der Vorlage behalten
+FARBTOENE = ("neutral", "vorlage")
+#: Grundton (``me_baseMapTint``) des Portimão-Trägers; die Spielstrecken haben ihn im Katalog (``grundton``)
+TRAEGER_GRUNDTON = [0.730, 0.708, 0.694]
 
 
 def _index_aus_erp(pfad: str) -> grafik.RessourcenIndex:
@@ -132,7 +154,7 @@ def _index_aus_erp(pfad: str) -> grafik.RessourcenIndex:
 
 
 def einsetzen(archiv: erp.ErpFile, vorlage: str, *, spielordner=None, code="portimao",
-              katalog_pfad=None) -> dict:
+              katalog_pfad=None, farbton: str = "neutral") -> dict:
     """Asphalttexturen von ``por_track_a`` auf die Vorlage umbiegen; Texturen aus dem Spiel kopieren.
 
     ``traeger``: keine Änderung. Rückgabe enthält ``mipmaps`` fürs Paket.
@@ -177,12 +199,69 @@ def einsetzen(archiv: erp.ErpFile, vorlage: str, *, spielordner=None, code="port
             qres = q.find(quelle_mat_kennung)
             if qres is not None:
                 quell_mat = grafik.Material.aus_bytes(qres.fragments[0].read())
-                konstanten = _konstanten_uebernehmen(quell_mat, ziel_mat)
+                konstanten = _konstanten_uebernehmen(quell_mat, ziel_mat, farbton)
     material.set_fragment_data(0, grafik.material_aendern(
         material.data(), texturen=tausch, konstanten=konstanten or None))
-    return {"vorlage": key, "strecke": strecke, "experimentell": bool(eintrag.get("experimentell")),
+    return {"vorlage": key, "strecke": strecke, "experimentell": bool(eintrag.get("experimentell")), "farbton": farbton,
             "ressourcen_neu": len(neu), "konstanten": sorted(konstanten), "mipmaps": list(mips),
             "slots": sorted(slots)}
+
+
+#: Kunstrasen: Zielslot (ts_ribbon des Trägers) → Quellslots nach Vorrang (lt_ribbon Melbourne, track_local Texas/Shanghai)
+KUNSTRASEN_SLOTS = {"me_albedoMap": ("me_baseAlbedoMap", "me_albedoMap", "me_smoothTarmacMap"),
+                    "me_normalMap": ("me_baseNormalMap", "me_normalMap", "me_smoothNormalMap"),
+                    "me_surfaceMap": ("me_baseSurfaceMap", "me_surfaceMap")}
+#: Asphaltanteile des Zielmaterials neutralisieren (sonst graue Detailtextur, aufgehellter Grundton, Staub)
+KUNSTRASEN_KONSTANTEN = {"me_baseMapTint": (1.0, 1.0, 1.0), "me_detailStrength": (0.0,),
+                         "me_detailRoughnessStrength": (0.0,), "me_dustStrength": (0.0,)}
+
+
+def kunstrasen_einsetzen(archiv: erp.ErpFile, strecke: str, *, spielordner=None, code="portimao",
+                         ziel_material="por_offtrack_a.material") -> dict:
+    """Kunstrasen (25.11.2026, docs/kerbtypen.md): ein ungenutztes Fahrbahnmaterial des Trägers (ts_ribbon) bekommt
+    Albedo, Normalen und Surface des Kunstrasen-Materials einer Spielstrecke (nur lesend aus dem Spielordner, Texturen
+    ins Paket; Zuordnung der Slots nach Bedeutung, ``KUNSTRASEN_SLOTS``). Grundton, Detail- und Staubanteil des
+    Asphalts werden neutralisiert."""
+    spiel = umgebung.spielordner_finden(spielordner)
+    if spiel is None:
+        raise VorlagenFehler("Game folder required for artificial grass (Tools → Set F1 25 game folder)")
+    ziel = next((r for r in archiv.resources if r.identifier.endswith("/terrain/materials/" + ziel_material)), None)
+    if ziel is None:
+        raise VorlagenFehler("%s missing in the carrier" % ziel_material)
+    pfad = _strecken_erp(spiel, strecke)
+    with erp.open_erp(pfad) as q:
+        kandidaten = [r for r in q.resources if r.identifier.endswith(".material")
+                      and any(w in r.identifier.rsplit("/", 1)[-1].lower() for w in ("astro", "turf"))
+                      and "physics" not in r.identifier.lower()]
+        if not kandidaten:
+            raise VorlagenFehler("No artificial grass material in %s" % strecke)
+        quelle = grafik.Material.aus_bytes(kandidaten[0].fragments[0].read())
+        quelle_kennung = kandidaten[0].identifier
+    ziel_mat = grafik.Material.aus_bytes(ziel.fragments[0].read())
+    q_tex, z_tex = quelle.texturen(), ziel_mat.texturen()
+    zuordnung = {}
+    for z_slot, kandidaten in KUNSTRASEN_SLOTS.items():
+        q_slot = next((k for k in kandidaten if k in q_tex), None)
+        if z_slot in z_tex and q_slot:
+            zuordnung[z_slot] = q_slot
+    if "me_albedoMap" not in zuordnung:
+        raise VorlagenFehler("%s and %s share no texture slots" % (quelle_kennung.rsplit("/", 1)[-1], ziel_material))
+    gemeinsam = sorted(zuordnung)
+    idx = _index_aus_erp(pfad)
+    try:
+        neu, mips, fehlt = umgebung.ressourcen_kopieren(archiv, idx, [q_tex[zuordnung[s]] for s in gemeinsam], code,
+                                                        spiel, praefix="astr_")
+    finally:
+        idx.schliessen()
+    if fehlt:
+        raise VorlagenFehler("Textures missing in the game data for artificial grass: %s" % ", ".join(fehlt[:5]))
+    tausch = {z_tex[s]: q_tex[zuordnung[s]] for s in gemeinsam}
+    namen = {p.name for p in ziel_mat.parameter if p.art == 1}
+    konstanten = {k: v for k, v in KUNSTRASEN_KONSTANTEN.items() if k in namen}
+    ziel.set_fragment_data(0, grafik.material_aendern(ziel.data(), texturen=tausch, konstanten=konstanten or None))
+    return {"strecke": strecke, "material": quelle_kennung.rsplit("/", 1)[-1],
+            "slots": {s: zuordnung[s] for s in gemeinsam},
+            "ressourcen_neu": len(neu), "konstanten": sorted(konstanten), "mipmaps": list(mips)}
 
 
 def skid_einsetzen(archiv: erp.ErpFile, vorlage: str, *, spielordner=None, code="portimao",
@@ -291,6 +370,7 @@ def asphalt_katalog_aus_roh(vorlagen_roh: dict, alt_asphalt=None) -> dict:
             "material": e["material"], "shader": e["shader"],
             "experimentell": e["experimentell"], "slots": e["slots"],
             "vorschau": _alt_vorschau(alt_vorlagen, "strecke", rep, rep + ".png"),
+            **({"grundton": e["grundton"]} if e.get("grundton") else {}),
         }
         reihenfolge.append(rep)
     for t in _alt_type_aliase(alt_vorlagen, "traeger", True):
@@ -388,8 +468,10 @@ def analysieren(spiel: str, ziel: Optional[str] = None, log=print, vorschau: boo
                         continue
                     slots[ziel_slot] = basis
                     finger.append(r.hash.hex() if hasattr(r, "hash") and r.hash else basis)
+                ton = m.konstanten().get("me_baseMapTint")
                 vorlagen_roh[strecke] = {
                     "material": haupt, "shader": art, "experimentell": art != "ts_ribbon",
+                    "grundton": [round(float(v), 3) for v in ton] if ton and len(ton) == 3 else None,
                     "slots": slots, "finger": tuple(finger),
                 }
                 skid_kennung = tx.get(SKID_SLOT)

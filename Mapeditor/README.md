@@ -57,6 +57,8 @@ sofort ohne Neustart; Projekt, Rückgängig-Verlauf, Vorschau und Kartenausschni
 - **F1** öffnet die gegliederte Bedienhilfe (Schnellstart, Karte, Segmente, Eigenschaften, Farben).
 - **Eigene 3D-Modelle aus Blender (16.11.2026):** Reiter *Environment* → *Import model …*; Anleitung für Endnutzer:
   [`docs/own_models_blender.md`](docs/own_models_blender.md) (englisch), Kurzfassung [`docs/own_models_blender.de.md`](docs/own_models_blender.de.md).
+- **3D-Ansicht (21.11.2026):** Menü *View → 3D view …* (Strg+3): zweites Fenster mit Probefahrt (Onboard/Verfolger/TV/frei, Abspielen mit Tempo der Ideallinie), Texturen, Himmel, Sonne, Einblendungen, eigene und echte Spielmodelle, Bearbeiten in 3D (wählen, verschieben, drehen, setzen, löschen) und gemerkten Ansichten. Details: [`docs/3d_ansicht.md`](docs/3d_ansicht.md).
+- **Umgebungswerkzeuge (20.11.2026):** Reiter *Environment* → *Row along the track* (Tribünen, Zäune, Fahnen in gleichem Abstand, zur Strecke ausgerichtet), Bepflanzen als *Band along the track* oder *Infield* (*Plant now*), Haken *Over the track* für Tore/Brücken, Bodenart *Foundation* (Gelände unter dem Objekt eingeebnet), *Library …*/*Save to library* (Modellbibliothek über alle Projekte), Menü *Tools → Swofty add-ons …*, im Baudialog *Visibility corridor*. Details: [`../docs/mapeditor/umgebung_werkzeuge.md`](../docs/mapeditor/umgebung_werkzeuge.md).
 - **Höhe/Steigung (25.10.2026):** Im Reiter *Höhenprofil* ist jeder Kontrollpunkt bzw. jedes Segmentende ein
   Griff. Ziehen ändert die Höhe (0,1-m-Raster, ein Undo-Schritt; gewählte Punkte gemeinsam), Rahmen wählt mehrere,
   ↑/↓ 0,1 m (Umschalt 1 m), Rechtsklick: *Gleichmäßige Steigung (Rampe)*, *Auf gleiche Höhe*, *Glätten*,

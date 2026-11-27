@@ -22,13 +22,14 @@ SCHEMA = 1
 DATEI = "umgebung.json"
 #: Reihenfolge der Schlüssel beim Schreiben (unbekannte Schlüssel folgen danach)
 KOPF_SCHLUESSEL = ("schema", "bodenbewuchs", "gelaende", "vorderseiten", "objekte")
-OBJEKT_SCHLUESSEL = ("id", "modell", "x", "z", "hoehe_m", "drehung_grad", "skala", "gruppe", "boden")
+OBJEKT_SCHLUESSEL = ("id", "modell", "x", "z", "hoehe_m", "drehung_grad", "skala", "gruppe", "boden", "ueber_fahrbahn")
 #: Bodenbezug je Objekt (optionales Feld ``boden``, wie ``strecke.umgebung.BODEN_MODI``): ``auto`` = Grundriss auf den
 #: tiefsten Bodenpunkt, Geometrie über dem Ursprung mit der Unterkante; ``ursprung`` = Modellursprung auf den Boden
 #: (bis 14.11.2026); ``unterkante`` = Unterkante der AABB immer auf den Boden. Siehe docs/mapeditor/objekte_ausrichtung.md
-BODEN_MODI = ("auto", "ursprung", "unterkante")
+#: ``fundament`` (20.11.2026): der Bau ebnet das Gelände unter dem Grundriss auf die höchste Stelle ein (Objekte am Hang)
+BODEN_MODI = ("auto", "ursprung", "unterkante", "fundament")
 BODEN_NAMEN = {"auto": N_("Automatic (lowest point)"), "ursprung": N_("Model origin"),
-               "unterkante": N_("Bottom of the model")}
+               "unterkante": N_("Bottom of the model"), "fundament": N_("Foundation")}
 #: Herkunft der Vorderseite: Projekt (umgebung.json → vorderseiten), Originalstrecken, Annahme aus dem Grundriss
 VORNE_QUELLEN = {"projekt": N_("set in this project"), "spiel": N_("from the game's tracks"),
                  "annahme": N_("assumed (long side)")}
@@ -104,6 +105,11 @@ def normalisiere_objekt(objekt):
     ergebnis["gruppe"] = "" if gruppe is None else str(gruppe)
     if "boden" in objekt and objekt["boden"] not in BODEN_MODI:
         raise ValueError(f"Objekt {objekt['id']}: boden muss {', '.join(BODEN_MODI)} sein")
+    if "ueber_fahrbahn" in objekt:     # Tor/Brücke über der Bahn, gewollt (20.11.2026)
+        if not isinstance(objekt["ueber_fahrbahn"], bool):
+            raise ValueError(f"Objekt {objekt['id']}: ueber_fahrbahn muss true/false sein")
+        if not objekt["ueber_fahrbahn"]:
+            ergebnis.pop("ueber_fahrbahn")
     return ergebnis
 
 
@@ -583,6 +589,177 @@ def streuen(gebiet, modelle, dichte_ha, seed, *, hindernis=None, abstand_fahrbah
                for kennung, (x, z, modell, s, drehung) in zip(ids, gesetzt)]
     auskunft["gesetzt"] = len(objekte)
     return objekte, auskunft
+
+
+# ------------------------------------------------------------------ Entlang der Strecke (20.11.2026)
+SEITEN = ("links", "rechts", "beide")
+SEITEN_NAMEN = {"links": N_("Left"), "rechts": N_("Right"), "beide": N_("Both sides")}
+AUSRICHTUNGEN = ("strecke", "laengs")
+AUSRICHTUNG_NAMEN = {"strecke": N_("Front faces the track"), "laengs": N_("Front in driving direction")}
+MAX_REIHE = 2000
+
+
+class Linie:
+    """Mittellinie als geschlossener Zug: Station ``s`` (m ab dem ersten Punkt, bei der Vorschau die Start-/Ziellinie),
+    Richtung und rechte Normale je Punkt (Karte: x rechts, z unten)."""
+
+    def __init__(self, punkte):
+        self.p = np.asarray(punkte, float).reshape(-1, 2)
+        if len(self.p) < 3:
+            raise ValueError("Mittellinie zu kurz")
+        d = np.hypot(*np.diff(np.vstack([self.p, self.p[:1]]), axis=0).T)
+        self.s = np.r_[0.0, np.cumsum(d)[:-1]]
+        self.laenge = float(d.sum())
+        t = np.roll(self.p, -1, axis=0) - np.roll(self.p, 1, axis=0)
+        t /= np.maximum(np.hypot(t[:, 0], t[:, 1]), 1e-9)[:, None]
+        self.t = t
+        self.r = np.column_stack([-t[:, 1], t[:, 0]])
+
+    def index(self, s):
+        s = float(s) % self.laenge
+        return int(np.clip(np.searchsorted(self.s, s, side="right") - 1, 0, len(self.s) - 1))
+
+    def naechster(self, xz):
+        """(Index, seitlicher Abstand, rechts positiv) des nächsten Punkts je Punkt in ``xz``."""
+        xz = np.asarray(xz, float).reshape(-1, 2)
+        i = np.empty(len(xz), int)
+        for a in range(0, len(xz), 1024):
+            teil = xz[a:a + 1024]
+            i[a:a + 1024] = ((teil[:, None, :] - self.p[None]) ** 2).sum(-1).argmin(1)
+        seitlich = ((xz - self.p[i]) * self.r[i]).sum(1)
+        return i, seitlich
+
+    def innen(self, xz):
+        """Liegen die Punkte im Inneren der Runde? (Strahltest)"""
+        xz = np.asarray(xz, float).reshape(-1, 2)
+        x0, z0 = self.p[:, 0], self.p[:, 1]
+        x1, z1 = np.roll(x0, -1), np.roll(z0, -1)
+        nenner = np.where(z1 == z0, 1e-12, z1 - z0)
+        ergebnis = np.zeros(len(xz), bool)
+        for k, (x, z) in enumerate(xz):
+            kreuz = ((z0 > z) != (z1 > z)) & (x < (x1 - x0) * (z - z0) / nenner + x0)
+            ergebnis[k] = bool(np.count_nonzero(kreuz) % 2)
+        return ergebnis
+
+
+def _rand(hindernis, linie, i, seite):
+    """Abstand Mittellinie → Mauer (m) an Index ``i`` auf ``seite``; ohne passende Vorschau 0 (dann ab Mittellinie)."""
+    if hindernis is None or len(hindernis.pos) != len(linie.p):
+        return 0.0
+    return float(hindernis.rechts[i] if seite == "rechts" else hindernis.links[i])
+
+
+def _im_bereich(s, von, bis, laenge):
+    """Station ``s`` zwischen ``von`` und ``bis`` (über die Ziellinie hinweg, wenn ``bis`` < ``von``)."""
+    s = np.asarray(s, float) % laenge
+    von, bis = float(von) % laenge, float(bis) % laenge
+    return (von <= s) & (s <= bis) if von <= bis else (s >= von) | (s <= bis)
+
+
+def reihe(linie, modell, von_s, bis_s, schritt_m, seite, abstand_m, *, hindernis=None, ausrichtung="strecke",
+          vorne_grad=270.0, skala=1.0, hoehe_m=0.0, gruppe="", vorhanden=(), versatz=(0.0, 0.0, 0.0),
+          maximum=MAX_REIHE):
+    """Objekte in gleichem Abstand entlang der Strecke (Tribünen, Zäune, Fahnen …).
+
+    ``abstand_m``: hinter der Mauer (mit Vorschau), sonst ab der Mittellinie. ``ausrichtung``: ``strecke`` = Vorderseite
+    zur Mittellinie, ``laengs`` = Vorderseite in Fahrtrichtung. Rückgabe (Objekte, Auskunft)."""
+    if seite not in SEITEN or ausrichtung not in AUSRICHTUNGEN:
+        raise ValueError("Seite oder Ausrichtung unbekannt")
+    schritt_m = float(schritt_m)
+    if schritt_m <= 0:
+        raise StreuFehler("keine_flaeche", "Abstand muss größer als 0 sein")
+    spanne = (float(bis_s) - float(von_s)) % linie.laenge
+    anzahl = int(math.floor(spanne / schritt_m + 1e-6)) + 1
+    seiten = ("links", "rechts") if seite == "beide" else (seite,)
+    if anzahl * len(seiten) > maximum:
+        raise StreuFehler("zu_viele", "Zu viele Objekte", anzahl=anzahl * len(seiten), maximum=maximum)
+    gesetzt, verworfen = [], 0
+    for k in range(anzahl):
+        i = linie.index(float(von_s) + k * schritt_m)
+        p, t, r = linie.p[i], linie.t[i], linie.r[i]
+        for sd in seiten:
+            vz = 1.0 if sd == "rechts" else -1.0
+            quer = _rand(hindernis, linie, i, sd) + float(abstand_m)
+            x, z = p + r * vz * quer
+            if not im_weltbereich(x, z, versatz, WELT_RAND):
+                verworfen += 1
+                continue
+            if ausrichtung == "strecke":
+                grad = winkel(-r[0] * vz, -r[1] * vz) - float(vorne_grad)
+            else:
+                grad = winkel(t[0], t[1]) - float(vorne_grad)
+            gesetzt.append((float(x), float(z), grad % 360.0))
+    ids = naechste_ids({o["id"] for o in vorhanden}, len(gesetzt))
+    objekte = [{"id": kennung, "modell": modell, "x": round(x, 2), "z": round(z, 2), "hoehe_m": round(float(hoehe_m), 2),
+                "drehung_grad": round(g, 1), "skala": round(float(skala), 2), "gruppe": gruppe}
+               for kennung, (x, z, g) in zip(ids, gesetzt)]
+    return objekte, {"gesetzt": len(objekte), "verworfen_welt": verworfen,
+                     "ab_mauer": hindernis is not None and len(hindernis.pos) == len(linie.p)}
+
+
+class _GebietRaster:
+    """Gemeinsame Teile für Flächen aus der Mittellinie: Fläche über ein festes Raster geschätzt."""
+    form = "raster"
+
+    def flaeche_m2(self):
+        x0, z0, x1, z1 = self.box
+        n = 120
+        gx, gz = np.linspace(x0, x1, n), np.linspace(z0, z1, n)
+        gitter = np.array([(x, z) for z in gz for x in gx])
+        return float(self.enthaelt(gitter).mean()) * (x1 - x0) * (z1 - z0)
+
+
+class GebietBand(_GebietRaster):
+    """Streifen neben der Strecke zwischen zwei Stationen: ``abstand_min`` bis ``abstand_max`` hinter der Mauer
+    (mit Vorschau, sonst ab der Mittellinie) auf einer oder beiden Seiten."""
+    form = "band"
+
+    def __init__(self, linie, von_s, bis_s, seite, abstand_min, abstand_max, hindernis=None):
+        if seite not in SEITEN:
+            raise ValueError(seite)
+        self.linie, self.von, self.bis, self.seite = linie, float(von_s), float(bis_s), seite
+        self.dmin, self.dmax = sorted((float(abstand_min), float(abstand_max)))
+        if self.dmax - self.dmin <= 0:
+            raise StreuFehler("keine_flaeche", "Band ohne Breite")
+        self.hindernis = hindernis if hindernis is not None and len(hindernis.pos) == len(linie.p) else None
+        drin = _im_bereich(linie.s, self.von, self.bis, linie.laenge)
+        if not drin.any():
+            raise StreuFehler("keine_flaeche", "Keine Station im Bereich")
+        rand = max(self.hindernis.links.max(), self.hindernis.rechts.max()) if self.hindernis is not None else 0.0
+        weit = rand + self.dmax
+        pts = linie.p[drin]
+        self.box = (pts[:, 0].min() - weit, pts[:, 1].min() - weit, pts[:, 0].max() + weit, pts[:, 1].max() + weit)
+
+    def enthaelt(self, xz):
+        i, seitlich = self.linie.naechster(xz)
+        ok = _im_bereich(self.linie.s[i], self.von, self.bis, self.linie.laenge)
+        rechts = seitlich >= 0
+        mauer = (np.where(rechts, self.hindernis.rechts[i], self.hindernis.links[i])
+                 if self.hindernis is not None else 0.0)
+        quer = np.abs(seitlich) - mauer
+        ok &= (quer >= self.dmin) & (quer <= self.dmax)
+        if self.seite == "rechts":
+            ok &= rechts
+        elif self.seite == "links":
+            ok &= ~rechts
+        return ok
+
+
+class GebietInnen(_GebietRaster):
+    """Innenfeld der Runde (alles innerhalb der Mittellinie; den Abstand zur Strecke hält ``streuen`` ein)."""
+    form = "innen"
+
+    def __init__(self, linie):
+        self.linie = linie
+        self.box = (linie.p[:, 0].min(), linie.p[:, 1].min(), linie.p[:, 0].max(), linie.p[:, 1].max())
+
+    def enthaelt(self, xz):
+        xz = np.asarray(xz, float).reshape(-1, 2)
+        x0, z0, x1, z1 = self.box
+        ok = (xz[:, 0] >= x0) & (xz[:, 0] <= x1) & (xz[:, 1] >= z0) & (xz[:, 1] <= z1)
+        if ok.any():
+            ok[ok] = self.linie.innen(xz[ok])
+        return ok
 
 
 def kopie(daten):

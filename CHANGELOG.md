@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.6.0
+
+- 3D view (View → 3D view, Ctrl+3 in its workspace, Ctrl+Shift+3 in its own window, Qt Quick 3D): mesh from the
+  racing-line run, test lap at racing-line speed with onboard, chase and TV cameras, editor camera (orbit around the point
+  under the mouse, zoom to the mouse, pan, double-click to fly there, right mouse + W A S D Q E to fly, speed by height),
+  layers, time of day, textures, sky and sun, own GLB models and the game's models (read-only, cached), editing objects in
+  3D (select, move, rotate, delete), view cone of the 3D camera in the 2D map
+- Game look in the 3D view: surfaces with the build's UVs and the game's textures (asphalt or chosen track surface,
+  kerb atlas with end pieces, sausage kerbs, grass/gravel per landscape and colour tone baked into the texture, concrete,
+  artificial grass), outer terrain of the carrier with the build's mountains and maps, ground cut exactly at the hole,
+  garages, pit perches and braking boards from the build steps, and the game's models of the environment; SpeedTree
+  plants as GPU instances (level of detail 1, one part per material, cut-out leaves). Read only from the carrier package
+  and the game folder, cached under the local application data folder; missing parts are calculated in parallel
+- Loading: loading indicator, mesh of the 3D view stored next to the project and reused for the same definition, game
+  look index read without a worker process (first time about 15 s instead of about a minute), game models loaded in one
+  job, height grid vectorised (also speeds up the build); no flicker of the main window when the 3D view opens first
+- Braking boards with their distance and grid slots in the 3D view
+- Automatic updates: GitHub `releases/latest` at most once a day (Help → Check for updates …, can be switched off),
+  dialog with the release notes, download with SHA-256 check, folder swap after closing, "What's new" once after the
+  first start of a new version
+- Workspaces Track, Environment, 3D, Review and All (Ctrl+1 … Ctrl+5) in one toolbar with the tools of the workspace;
+  panels, tabs and splitter sizes remembered per workspace, View → Workspace → Reset this workspace. Tool Environment
+  renamed to Place, project info in the status bar
+- Kerb types: sausage kerbs (TRN~ code BUMP, Portimão sausage-kerb material, height/width/distance/piece length/gap,
+  check WU-01), raised kerbs with profile, negative kerbs (rumble physics), double kerbs, white end pieces, artificial
+  grass run-off (textures copied read-only from the game folder)
+- Animations: rigid node animation from glTF (AnimModel + AnimClip, translation/scale/rotation), *Play animation* per
+  model, animated materials water / scrolling text / flag (glTF extras `f1_effect` or `modelle.json` → `effekte`),
+  check MO-08
+- Environment: rows along the track, bands between two stations, infield filling, *Over the track* for gates and
+  bridges, foundations on slopes, model library for all projects, Swofty add-ons in the clean-up window
+- Visibility corridor chosen automatically when there would be too many PVS cells
+- Track surface templates keep only their brightness by default (*Keep the template's colour tone* for the tint)
+- Fixed: greenish/olive track edges (dust colour of the template, macro-map grass on the asphalt), grass patches over
+  wide road triangles in the 3D view
+- Install in launcher (and start): `swofty addons list` runs as a background step instead of blocking the window for up
+  to 60 s; the Build window is busy during installation and game (no second build, Cancel during the installation,
+  not during the game) and names each step (checking add-ons, installing, enabling, game running, reading the session)
+- Distribution about 240 MB unpacked (Qt Quick, QML and Qt Quick 3D are included now)
+
 ## 0.5.1
 
 - Track surface and tyre marks (Build window, Advanced): choose the asphalt and the dark tyre-mark strip of an F1 25

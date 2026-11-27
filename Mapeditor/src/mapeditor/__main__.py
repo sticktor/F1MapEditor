@@ -65,6 +65,10 @@ def main(argv=None):
         QMessageBox.critical(None, tr("Project could not be opened"), str(error))
         return 1
     window.show()
+    # Release Notes nach einem Update, dann (einmal am Tag) nach einer neuen Version suchen (aktualisierung_ui)
+    from PySide6.QtCore import QTimer
+    from . import aktualisierung_ui
+    QTimer.singleShot(800, lambda: aktualisierung_ui.beim_start(window))
     return app.exec()
 
 
